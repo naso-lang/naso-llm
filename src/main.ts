@@ -18,6 +18,13 @@ import { quantizeRows, quantError, packedBytes, type QuantizedMatrix } from './q
 
 const SYSTEM_PROMPT = 'You are a helpful AI assistant.';
 
+/**
+ * The Cache Storage bucket the service worker reads for the checkpoint and
+ * tokenizer (cache-first). The page writes into the same bucket so a first
+ * visit is cached even if the worker was not yet controlling the page.
+ */
+const MODEL_CACHE = 'naso-llm-models-v1';
+
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
 
@@ -91,7 +98,7 @@ async function loadModel() {
     let buf: ArrayBuffer | null = await fetchWithProgress(weightsUrl, (loaded_, total) => {
       bar.style.width = `${total ? ((loaded_ / total) * 100).toFixed(1) : 0}%`;
       phase(`downloading ${(loaded_ / 1e6).toFixed(0)}/${(total / 1e6).toFixed(0)} MB`);
-    });
+    }, MODEL_CACHE);
     logger.info('main', `downloaded ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 
     phase('decoding…');
@@ -307,16 +314,20 @@ async function send() {
   body.appendChild(caret);
 
   try {
-    // Incremental context. Every turn appends exactly one user turn followed by
-    // the opening assistant turn, so the cache's contents are identical to
-    // rendering the whole conversation and prefilling it from scratch. The
-    // system block is emitted only when the cache is empty, otherwise it would
-    // be repeated on every turn.
+    // Incremental context, in the model's real ChatML format. The turn markers
+    // are load-bearing: feeding SmolLM2-Instruct bare `user\n...\nassistant\n`
+    // text without them makes it loop and hallucinate fake turns instead of
+    // answering. Each turn appends one user block and the assistant opener, so
+    // the cache's contents are identical to rendering the whole conversation
+    // and prefilling it from scratch. The system block is emitted only when the
+    // cache is empty, otherwise it would repeat every turn.
+    const IM_START = '\u003c\u007cim_start\u007c\u003e';
+    const IM_END = '\u003c\u007cim_end\u007c\u003e';
     if (cache.pos === 0) {
-      prefill(tensors, config, tokenizer.encode(`<|im_start|>system\n${SYSTEM_PROMPT}<|im_end|>\n`, true), cache);
+      prefill(tensors, config, tokenizer.encode(`${IM_START}system\n${SYSTEM_PROMPT}${IM_END}\n`, true), cache);
     }
-    let logits = prefill(tensors, config, tokenizer.encode(`<|im_start|>user\n${text}<|im_end|>\n`, true), cache);
-    logits = prefill(tensors, config, tokenizer.encode('<|im_start|>assistant\n', true), cache);
+    let logits = prefill(tensors, config, tokenizer.encode(`${IM_START}user\n${text}${IM_END}\n`, true), cache);
+    logits = prefill(tensors, config, tokenizer.encode(`${IM_START}assistant\n`, true), cache);
 
     const maxTokens = Number($<HTMLInputElement>('max-tokens').value) || 96;
     const temperature = Number($<HTMLInputElement>('temperature').value) || 0;
@@ -340,8 +351,9 @@ async function send() {
       const reply = body.textContent ?? '';
       history.push({ role: 'assistant', content: reply });
       body.textContent = reply;
-      // Close the assistant turn so the next one continues from here.
-      prefill(tensors, config, tokenizer.encode(`<|im_end|>\n`, true), cache);
+      // Close the assistant turn with the real marker so the next turn continues
+      // from a well-formed boundary.
+      prefill(tensors, config, tokenizer.encode(`${IM_END}\n`, true), cache);
     } else {
       body.textContent = '(no tokens — raise max tokens or rephrase)';
     }
@@ -375,6 +387,50 @@ function populateModels() {
     loaded = false;
     $<HTMLButtonElement>('send').disabled = true;
   });
+}
+
+/**
+ * Wait until the service worker controls this page.
+ *
+ * This exists because of a real, reported bug: on the FIRST visit the worker is
+ * still installing when the 269 MB checkpoint fetch fires, so nothing
+ * intercepts it and nothing caches it. The second visit then downloads the
+ * whole checkpoint AGAIN. `register()` alone does not order this -- the page
+ * must wait for control (the worker calls skipWaiting + clients.claim).
+ *
+ * Bounded, and never fatal: if the worker cannot be installed the app still
+ * runs -- the weights fetch writes into the same cache bucket itself, so the
+ * next visit is served from disk either way.
+ */
+async function waitForServiceWorkerControl(timeoutMs = 15000): Promise<boolean> {
+  if (!('serviceWorker' in navigator)) return false;
+  if (navigator.serviceWorker.controller) return true;
+
+  // Register relative to the page, not '/sw.js': the deployed app lives under a
+  // repo subpath on GitHub Pages, where a root-absolute URL 404s and offline
+  // support silently never activates.
+  const swUrl = new URL('./sw.js', document.baseURI).href;
+  try {
+    await navigator.serviceWorker.register(swUrl);
+  } catch (e) {
+    logger.warn('main', `service worker registration failed: ${e}`);
+    return false;
+  }
+
+  if (!navigator.serviceWorker.controller) {
+    await Promise.race([
+      new Promise<void>((resolve) => {
+        navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), { once: true });
+      }),
+      navigator.serviceWorker.ready.then(() => undefined),
+      new Promise<void>((r) => setTimeout(r, timeoutMs)),
+    ]);
+  }
+  const controlled = !!navigator.serviceWorker.controller;
+  logger.info('main', controlled
+    ? 'service worker is controlling this page'
+    : 'service worker did not take control in time; caching the checkpoint directly');
+  return controlled;
 }
 
 async function boot() {
@@ -422,23 +478,17 @@ async function boot() {
     }
   });
 
-  if ('serviceWorker' in navigator) {
-    // Register relative to the page, not '/sw.js': the deployed app lives under
-    // a repo subpath on GitHub Pages, where a root-absolute URL 404s and offline
-    // support silently never activates.
-    const swUrl = new URL('./sw.js', document.baseURI).href;
-    navigator.serviceWorker.register(swUrl).then(
-      () => logger.info('main', 'service worker registered (offline cache ready)'),
-      (e) => logger.warn('main', `service worker registration failed: ${e}`),
-    );
-  }
-
   // Watchdog: boot() sets window.__nasoBooted on its first line. If the page is
   // still grey after this long the bundle never executed at all (a 404 under the
   // deployed base path, a syntax error, ...) -- the exact silent failure this UI
   // was reported for. index.html owns the timer because code in this file cannot
   // report its own absence; here we only disarm it.
   window.clearTimeout((window as any).__nasoWatchdog);
+
+  // Order matters: take control BEFORE the checkpoint fetch, or the first
+  // visit's 269 MB never reaches Cache Storage and every revisit re-downloads
+  // it. The await is bounded, so a blocked worker cannot stall the app.
+  await waitForServiceWorkerControl();
 
   // Auto-start the default model so the demo is one click, not four.
   void loadModel();

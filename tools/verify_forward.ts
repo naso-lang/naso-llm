@@ -218,8 +218,8 @@ function main() {
   // long conversation, which is the hardest kind of bug to notice.
   console.log(`\n[6] incremental multi-turn prefill == full re-render`);
   const tok = BPETokenizer.fromJSON(JSON.parse(readFileSync(`${DIR}/tokenizer.json`, 'utf8')));
-  const CT = '<|im_' + 'start|>';
-  const CTE = '<|im_' + 'end|>';
+  const CT = '\u003c\u007cim_start\u007c\u003e';
+  const CTE = '\u003c\u007cim_end\u007c\u003e';
   const SYS = 'You are a helpful AI assistant.';
   // A two-turn conversation with a REAL generated reply in between, driven
   // through exactly the sequence the UI uses: the system block once, then per
@@ -231,23 +231,23 @@ function main() {
   const q2 = 'And what is its population?';
 
   // turn 1
-  prefill(t, config, tok.encode(`<|im_start|>system\n${SYS}<|im_end|>\n`, true), inc);
-  let l1 = prefill(t, config, tok.encode(`<|im_start|>user\n${q1}<|im_end|>\n`, true), inc);
-  l1 = prefill(t, config, tok.encode('<|im_start|>assistant\n', true), inc);
+  prefill(t, config, tok.encode(`${CT}system\n${SYS}${CTE}\n`, true), inc);
+  let l1 = prefill(t, config, tok.encode(`${CT}user\n${q1}${CTE}\n`, true), inc);
+  l1 = prefill(t, config, tok.encode(`${CT}assistant\n`, true), inc);
   const replyIds = decodeFrom(t, config, tok, l1, inc, { maxTokens: 24, temperature: 0, topK: 1, seed: 1234 });
   const reply = tok.decode(replyIds);
-  prefill(t, config, tok.encode(`<|im_end|>\n`, true), inc);
+  prefill(t, config, tok.encode(`${CTE}\n`, true), inc);
 
   // turn 2
-  let incLogits = prefill(t, config, tok.encode(`<|im_start|>user\n${q2}<|im_end|>\n`, true), inc);
-  incLogits = prefill(t, config, tok.encode('<|im_start|>assistant\n', true), inc);
+  let incLogits = prefill(t, config, tok.encode(`${CT}user\n${q2}${CTE}\n`, true), inc);
+  incLogits = prefill(t, config, tok.encode(`${CT}assistant\n`, true), inc);
 
   // The same conversation rendered whole and prefilled from scratch.
-  const chatml = `<|im_start|>system\n${SYS}<|im_end|>\n` +
-    `<|im_start|>user\n${q1}<|im_end|>\n` +
-    `<|im_start|>assistant\n${reply}<|im_end|>\n` +
-    `<|im_start|>user\n${q2}<|im_end|>\n` +
-    `<|im_start|>assistant\n`;
+  const chatml = `${CT}system\n${SYS}${CTE}\n` +
+    `${CT}user\n${q1}${CTE}\n` +
+    `${CT}assistant\n${reply}${CTE}\n` +
+    `${CT}user\n${q2}${CTE}\n` +
+    `${CT}assistant\n`;
   const fresh = createKVCache(config, 512);
   const wholeIds = tok.encode(chatml, true);
   let freshLogits = new Float32Array(0);
@@ -269,6 +269,31 @@ function main() {
     console.log(`    argmax incremental=${argmax(incLogits)} fresh=${argmax(freshLogits)} ${same ? 'MATCH' : 'MISMATCH'}`);
     if (d !== 0 || !same) failures++;
   }
+
+
+  // ---- 7. a real reply must be COHERENT, not a hallucinated turn loop ------
+  // The failure mode this guards: the app once fed the model bare
+  // `user...assistant` text with no ChatML control tokens. The model did not
+  // answer -- it continued the "script" and generated fake `user`/`assistant`
+  // lines inside its own reply, forever. Every numerical check above still
+  // passed, because the arithmetic was perfectly correct; only the text was
+  // garbage. So this asserts on the generated TEXT: a reply must not contain
+  // turn markers or role labels, and must stop at the end-of-turn token.
+  console.log(`\n[7] generated reply is coherent (no hallucinated turns)`);
+  const cohCache = createKVCache(config, 512);
+  prefill(t, config, tok.encode(`${CT}system\n${SYS}${CTE}\n`, true), cohCache);
+  let cohLogits = prefill(t, config, tok.encode(`${CT}user\n${q1}${CTE}\n${CT}assistant\n`, true), cohCache);
+  const cohIds = decodeFrom(t, config, tok, cohLogits, cohCache, { maxTokens: 40, temperature: 0, topK: 1, seed: 1234 });
+  const cohText = tok.decode(cohIds);
+  const leaked = cohText.includes(CT) || cohText.includes(CTE)
+    || /(^|\n)\s*(user|assistant|system)\s*(\n|$)/.test(cohText);
+  const stoppedAtEos = cohIds.length === 0 || cohIds[cohIds.length - 1] !== tok.eosId;
+  const hi = cohLogits ? argmax(cohLogits) : -1;
+  console.log(`    reply: ${JSON.stringify(cohText)}`);
+  console.log(`    ${cohIds.length} tokens; ends on EOS: ${!stoppedAtEos}; leaked turn labels: ${leaked}`);
+  console.log(`    first-token argmax = ${hi} (504 = "The")`);
+  if (leaked || hi !== 504) failures++;
+  else console.log('    coherent, and the first token is the expected "The"');
 
   console.log(failures === 0 ? '\nRESULT: PASS' : `\nRESULT: FAIL (${failures} check(s))`);
   process.exit(failures === 0 ? 0 : 1);

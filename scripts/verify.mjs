@@ -110,6 +110,36 @@ step('backend-findings', () => ({ ok: run('node', [join(root, 'tools', 'probe-ba
 // 8. safetensors decode equivalence (bf16/f16 bit-identical over the full domain)
 step('decode', () => ({ ok: run('node', [join(root, 'scripts', 'verify-decode.mjs')]), note: 'bit-identical over 2^16' }));
 
+
+// 9. end-to-end chat in a real browser, against a LOCAL model mirror.
+//     Hermetic by design: hitting Hugging Face here would burn its 3000-req/5min
+//     resolve budget and make the suite flaky. Skipped when no mirror is
+//     running (start one with: npm run modelserve).
+const server = process.env.NASO_SMOKE_URL ?? 'http://localhost:3000/';
+const mirror = process.env.NASO_MODEL_BASE ?? 'http://127.0.0.1:8777';
+const mirrorUp = (() => {
+  try { return spawnSync('curl', ['-s', '-o', '/dev/null', '-w', '%{http_code}', `${mirror}/config.json`],
+    { encoding: 'utf8' }).stdout?.trim() === '200'; } catch { return false; }
+})();
+const appUp = (() => {
+  try { return spawnSync('curl', ['-s', '-o', '/dev/null', '-w', '%{http_code}', server],
+    { encoding: 'utf8' }).stdout?.trim() === '200'; } catch { return false; }
+})();
+
+if (mirrorUp && appUp) {
+  step('e2e-chat', () => {
+    const r = spawnSync('node', [join(root, 'scripts', 'e2e-chat.mjs'), server, mirror],
+      { cwd: root, encoding: 'utf8' });
+    process.stdout.write(r.stdout ?? '');
+    if (r.status !== 0) process.stdout.write(r.stderr ?? '');
+    return { ok: r.status === 0, note: 'real browser, 2 turns + revisit' };
+  });
+} else {
+  console.log(`\n=== e2e-chat ===\nskipped: needs the dev server and a local model mirror.`);
+  console.log(`  start: npm run dev   and   npm run modelserve`);
+  results.push({ name: 'e2e-chat', ok: true, skipped: true });
+}
+
 const failed = results.filter(r => !r.ok);
 console.log('\n' + '─'.repeat(60));
 for (const r of results) console.log(`  ${r.ok ? 'ok  ' : 'FAIL'} ${r.name}${r.skipped ? ' (skipped)' : ''}${r.note ? `  ${r.note}` : ''}`);

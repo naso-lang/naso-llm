@@ -61,6 +61,19 @@ export interface ChatMessage {
   content: string;
 }
 
+/**
+ * The ChatML control strings this tokenizer's model was trained on.
+ *
+ * Written as \u escapes rather than literals on purpose: these exact strings
+ * must match entries in the checkpoint's `added_tokens` (`` = 1,
+ * `` = 2). Getting them wrong is invisible -- `encode(s, true)` simply
+ * fails to match and falls through to byte-level pieces -- and the consequence
+ * is severe: a SmolLM2-Instruct model fed bare `user\n...\nassistant\n` text
+ * with no control tokens does not answer, it loops and hallucinates fake turns.
+ */
+const IM_START = '\u003c\u007cim_start\u007c\u003e';
+const IM_END = '\u003c\u007cim_end\u007c\u003e';
+
 export class BPETokenizer {
   private readonly vocab: Map<string, number>;
   private readonly ranks: Map<string, number>;
@@ -98,8 +111,8 @@ export class BPETokenizer {
       .filter((a) => a.special)
       .map((a) => a.content)
       .sort((a, b) => b.length - a.length);
-    this.eosId = this.vocab.get('<|im_end|>') ?? this.vocab.get('<|endoftext|>') ?? 2;
-    this.imStartId = this.vocab.get('<|im_start|>') ?? 0;
+    this.eosId = this.vocab.get(IM_END) ?? this.vocab.get('\u003c\u007cendoftext\u007c\u003e') ?? 2;
+    this.imStartId = this.vocab.get(IM_START) ?? 0;
   }
 
   static fromJSON(json: unknown): BPETokenizer {
@@ -254,8 +267,11 @@ export class BPETokenizer {
 
   /**
    * ChatML template (SmolLM2 / Qwen family), matching the model's
-   * `tokenizer_config.json`. `addGenerationPrompt` opens the assistant turn so
-   * the model continues from it.
+   * `tokenizer_config.json`. The `` / `` markers are required, not
+   * cosmetic: without them the model does not recognise turn boundaries at all
+   * and generates fake `user`/`assistant` lines inside its own reply.
+   *
+   * `addGenerationPrompt` opens the assistant turn so the model continues from it.
    */
   static chatTemplate(
     messages: ChatMessage[],
@@ -264,12 +280,12 @@ export class BPETokenizer {
   ): string {
     let out = '';
     const sys = systemPrompt ?? messages.find((m) => m.role === 'system')?.content;
-    if (sys) out += `<|im_start|>system\n${sys}<|im_end|>\n`;
+    if (sys) out += `${IM_START}system\n${sys}${IM_END}\n`;
     for (const m of messages) {
       if (m.role === 'system') continue;
-      out += `<|im_start|>${m.role}\n${m.content}<|im_end|>\n`;
+      out += `${IM_START}${m.role}\n${m.content}${IM_END}\n`;
     }
-    if (addGenerationPrompt) out += '<|im_start|>assistant\n';
+    if (addGenerationPrompt) out += `${IM_START}assistant\n`;
     return out;
   }
 }

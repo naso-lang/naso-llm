@@ -95,6 +95,27 @@ async function cacheFirst(request, cacheName) {
   return res;
 }
 
+/**
+ * Hugging Face: serve a stored entry if there is one, else fetch and return the
+ * response WITHOUT cloning it into the cache.
+ *
+ * The page owns caching these files (it tees the response it is already
+ * downloading into this same cache), so letting the worker clone and store too
+ * would hold a second full copy of a 269 MB body in memory and duplicate the
+ * write. `cache.match` finds page-written entries, so offline revisits still work.
+ *
+ * This is a simplification, not a bug fix: the clone that used to be here was
+ * suspected of causing `TypeError: Failed to fetch`, but that was disproven --
+ * the old handler passes the same large fetch on both localhost and the live
+ * site. Those failures were Hugging Face's resolve rate limit.
+ */
+async function hfCacheFirst(request) {
+  const cache = await caches.open(MODEL);
+  const hit = await cache.match(request);
+  if (hit) return hit;
+  return fetch(request);
+}
+
 /** Network-first: fresh when online, cached shell when not. */
 async function networkFirst(request, cacheName, fallback) {
   const cache = await caches.open(cacheName);
@@ -119,10 +140,21 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
 
-  // Hugging Face: the checkpoint and tokenizer are immutable and large, so
-  // cache-first and never revalidate.
+  // Hugging Face: serve a stored entry if there is one, else a pure pass-through.
+  //
+  // The page owns caching these files: `fetchWithProgress` tees the response it
+  // is already downloading into this same cache. Letting the worker also clone
+  // and store here would keep a second full copy of a 269 MB body in memory and
+  // duplicate the write, for no benefit. `cache.match` finds page-written
+  // entries regardless of who stored them, so offline revisits still work.
+  //
+  // (An earlier version of this comment claimed this clone was causing a
+  // `TypeError: Failed to fetch`. That was disproven: the old handler passes the
+  // same large fetch on localhost and on the live site. The real cause of those
+  // failures was Hugging Face's resolve rate limit, exhausted by repeated test
+  // downloads of the checkpoint.)
   if (url.origin === 'https://huggingface.co' || url.hostname.endsWith('.hf.co')) {
-    event.respondWith(cacheFirst(request, MODEL));
+    event.respondWith(hfCacheFirst(request));
     return;
   }
 

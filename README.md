@@ -91,6 +91,8 @@ against itself. `npm run verify` runs all of them.
 | 11 | browser WGSL == native WGSL | byte comparison | identical |
 | 12 | bf16 / f16 decode | frozen float reference, full 2^16 domain | **0 mismatches** |
 | 13 | service-worker revisit | second visit with the same profile | model green both times |
+| 14 | first-visit persistence | Cache Storage contents after visit 1 | **269,060,552 B** cached, not 0 |
+| 15 | end-to-end chat (real browser) | local model mirror, 2 turns + reload | correct answers, **coherent turn 2**, 0 re-download |
 
 Check 12 exists because the load path was slow enough to be unusable: the bf16
 widener allocated two `ArrayBuffer`s **per element**, which on a 134.5M-element
@@ -108,6 +110,18 @@ the whole conversation and prefilling it. The test uses a real generated reply i
 the middle of the conversation, because a missing turn-boundary token is
 invisible to a single-turn test — and it caught exactly that bug during
 development.
+
+Check 14 and 15 cover the two failures a green-dot check cannot see. Check 14
+asserts the **cache contents** after a single visit, because "the model loaded"
+and "the checkpoint was persisted" are different claims: the first visit used to
+load fine while caching nothing, so every later visit silently re-downloaded
+269 MB. Check 15 drives the real UI in a real browser against a **local model
+mirror** (`npm run modelserve`) so the suite stays hermetic — hitting Hugging
+Face here would burn its 3000-request/5-minute resolve budget and make the tests
+flaky — and asserts on the generated *text*: turn 2 must stay coherent. That
+check exists because of a real bug: the prompt omitted SmolLM2's ChatML control
+tokens, so the model looped and hallucinated fake `user`/`assistant` turns inside
+its own reply while every numerical check still passed.
 
 `tools/reference_smol.py` is a NumPy forward pass written from the Llama
 architecture and Hugging Face's published conventions, deliberately **not**
@@ -235,12 +249,23 @@ Both findings are reproduced by `npm run probe` (`tools/probe-backend.mjs`).
   V8 (measured: 0.11 vs 1.6 GFLOPS), so int8 pays off in size, not CPU speed.
 * **The first visit really does download 269 MB**, and no amount of code makes
   that smaller. The checkpoint is bf16; decoding to f32 is what makes the model
-  usable, and that decode is now 0.3 s instead of 54 s. A warm visit still
-  re-reads and re-decodes the whole checkpoint from the cache (~5 s here) because
-  the parsed tensors are not persisted anywhere — Cache Storage holds opaque
-  response bodies, not structured data. Persisting the decoded/quantised form
-  (e.g. to OPFS) would remove those seconds, and is the obvious next step if the
-  warm load matters more than the code it would add.
+  usable, and that decode is now 0.3 s instead of 54 s. A warm visit re-reads and
+  re-decodes the checkpoint from the cache (~5 s here) because the parsed tensors
+  are not persisted anywhere — Cache Storage holds opaque response bodies, not
+  structured data. Persisting the decoded form (e.g. to OPFS) would remove those
+  seconds, and is the obvious next step if the warm load matters more than the
+  code it would add.
+* **Pre-quantising the checkpoint would cut the download by 2x, not 10x** —
+  measured with `tools/quant_cost.py`. The 210 projection matrices shrink 3.98x
+  (424.7 MB → 106.8 MB int8), but the token embedding is 113.2 MB of the total
+  and is not a projection; even quantising it as well leaves 135.3 MB against
+  269.1 MB today. So the download goes 215 s → 176 s on a slow (10 Mbit/s) link,
+  or 21.5 s → 17.6 s on a fast one. Two costs come with it: pre-quantising
+  freezes the error into the artifact (today's int8 path is an *in-browser
+  measurement* against the f32 model, with a live cosine check), and it breaks
+  the "download the published checkpoint, verify it here" story. The honest
+  framing is that it buys a 2x smaller first visit and a slightly faster warm
+  start, not a different class of product.
 * **Hugging Face rate-limits the endpoint that serves the checkpoint** (3000
   requests / 300 s per client). Repeated cold loads from one IP can trip it, and
   a tripped limit reaches the page as a bare `TypeError: Failed to fetch`, which

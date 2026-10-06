@@ -24,6 +24,8 @@
     "verify:tokenizer": "node tools/verify_tokenizer.mjs /var/tmp/smol/tokenizer.json /var/tmp/tok_oracle.json",
     "verify:bridge": "node tools/verify_bridge.mjs",
     "diag:load": "node scripts/diag-load.mjs",
+    "diag:revisit": "node scripts/diag-revisit.mjs",
+    "modelserve": "python3 -m http.server 8777 --directory /var/tmp/modelserve",
     "validate:wgsl": "bash -c 'for f in public/kernels/*.wgsl public/matmul*.wgsl; do ${WGSL_VALIDATE:-/var/tmp/cargo-target-wgsl/release/wgsl-validate} \"$f\"; done'",
     "probe": "node tools/probe-backend.mjs",
     "probe:gpu": "node scripts/probe-gpu-matrix.mjs",

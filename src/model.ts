@@ -128,9 +128,28 @@ export async function fetchWithRetry(url: string, attempts = 4): Promise<Respons
 export async function fetchWithProgress(
   url: string,
   onProgress?: (loaded: number, total: number) => void,
+  /**
+   * When set, a successful response is ALSO written to this Cache Storage bucket.
+   *
+   * Why this is here and not left to the service worker: the worker only sees a
+   * fetch if it controls the page at that instant. On a first visit it is still
+   * installing, so the 269 MB checkpoint used to reach the network uncached and
+   * every later visit re-downloaded it. `res.clone()` tees the body, so the
+   * bytes are stored from the SAME transfer -- no second 269 MB request.
+   */
+  cacheName?: string,
 ): Promise<ArrayBuffer> {
   const res = await fetchWithRetry(url);
   if (!res.ok) throw new Error(`GET ${url} -> HTTP ${res.status}`);
+
+  if (cacheName && 'caches' in window) {
+    // Fire and forget: a cache write failure must never fail the load, and the
+    // clone's body is consumed by the cache independently of ours.
+    const forCache = res.clone();
+    caches.open(cacheName)
+      .then((c) => c.put(url, forCache))
+      .catch((e) => logger.warn('main', `cache write failed for ${url}: ${e}`));
+  }
 
   const total = Number(res.headers.get('content-length') ?? '0');
   if (!res.body) return res.arrayBuffer();
