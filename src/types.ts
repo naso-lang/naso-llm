@@ -71,11 +71,13 @@ export interface LogEntry {
 /**
  * A model whose config.json / safetensors this app can fetch.
  *
- * `tiny-random-LlamaForCausalLM` is the default: a real, complete Llama
- * architecture (RMSNorm, QKV projection, RoPE, GQA, SwiGLU MLP, tied logits)
- * with tiny dimensions, so the whole forward pass runs in a browser tab. A
- * 2.7B model is not the right first target for a correctness demo -- the
- * maths is identical, and the tiny one can actually be executed and checked.
+ * Only instruct-tuned, chat-capable checkpoints belong in `MODELS`: everything
+ * here is selectable in the chat dropdown, so anything listed must actually be
+ * able to answer a question. The tiny complete-Llama fixtures used to exercise
+ * the quantisation kernels and the browser-vs-native compile check are NOT chat
+ * models -- `hf-internal-testing/tiny-random-LlamaForCausalLM` in particular has
+ * random weights, so chatting with it emits token soup. Leaving it in this list
+ * (it was once the default) let the app produce garbage from a valid selection.
  */
 export interface ModelConfig {
   id: string;
@@ -115,25 +117,6 @@ export const MODELS: ModelConfig[] = [
     rmsNormEps: 1e-5,
     ropeTheta: 100000.0,
     weightsBytes: 269060552,
-  },
-  /**
-   * The quantisation-kernel fixture: a complete Llama architecture at tiny
-   * dimensions. Used to exercise Naso's WGSL kernels and the byte-exact
-   * browser-vs-native compile check without a 269 MB download.
-   */
-  {
-    id: 'tiny-random-llama',
-    name: 'tiny-random-LlamaForCausalLM (2 layers, hidden 16)',
-    repo: 'hf-internal-testing/tiny-random-LlamaForCausalLM',
-    hiddenSize: 16,
-    intermediateSize: 64,
-    numLayers: 2,
-    numHeads: 4,
-    numKvHeads: 4,
-    vocabSize: 32000,
-    rmsNormEps: 1e-6,
-    ropeTheta: 10000.0,
-    weightsBytes: 4131280,
   },
 ];
 

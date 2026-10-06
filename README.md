@@ -274,11 +274,15 @@ Both findings are reproduced by `npm run probe` (`tools/probe-backend.mjs`).
   instead of a dead red dot. It cannot remove the limit — only report it honestly
   and let you retry. Caching the checkpoint after the first successful load is
   what keeps this from mattering on a normal visit.
-* **One model is wired up.** SmolLM2-135M-Instruct is what is verified end to end.
-  The config list in `src/types.ts` also carries `tiny-random-LlamaForCausalLM`, a
-  tiny complete Llama used as a fixture. Larger checkpoints would load — the
-  architecture code is general — but they have not been run, and shipping a model
-  path that had never executed is the kind of claim this project exists to avoid.
+* **One model is wired up.** SmolLM2-135M-Instruct is what is verified end to end,
+  and it is the only entry in the chat dropdown. Anything listed there is
+  selectable, so listing a model that cannot answer a question would let the app
+  emit token soup from a valid choice. The tiny complete-Llama fixtures used for
+  the quantisation kernels (`hf-internal-testing/tiny-random-LlamaForCausalLM`,
+  which has random weights) live under the verifying scripts, not in `MODELS`.
+  Larger instruct checkpoints would load — the architecture code is general — but
+  they have not been run, and shipping a model path that had never executed is
+  the kind of claim this project exists to avoid.
 * **Naso cannot emit a reduction yet.** Teaching the WGSL backend to emit
   reductions is the next step, and would make the matmuls Naso's too.
 
