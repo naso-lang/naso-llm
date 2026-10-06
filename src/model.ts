@@ -136,23 +136,42 @@ export async function fetchWithProgress(
    * installing, so the 269 MB checkpoint used to reach the network uncached and
    * every later visit re-downloaded it. `res.clone()` tees the body, so the
    * bytes are stored from the SAME transfer -- no second 269 MB request.
+   *
+   * Awaited rather than fire-and-forget: a 269 MB cache write takes real time,
+   * and a floating promise can be dropped (or outlive a navigation) with nothing
+   * to show for it. Waiting here makes the write observable and testable, at the
+   * cost of some seconds on the first load only.
    */
   cacheName?: string,
 ): Promise<ArrayBuffer> {
   const res = await fetchWithRetry(url);
   if (!res.ok) throw new Error(`GET ${url} -> HTTP ${res.status}`);
 
-  if (cacheName && 'caches' in window) {
-    // Fire and forget: a cache write failure must never fail the load, and the
-    // clone's body is consumed by the cache independently of ours.
-    const forCache = res.clone();
-    caches.open(cacheName)
-      .then((c) => c.put(url, forCache))
-      .catch((e) => logger.warn('main', `cache write failed for ${url}: ${e}`));
-  }
+  // Clone BEFORE any await. A Response body can only be cloned while it is
+  // still undisturbed; doing it after `await caches.open(...)` (as an earlier
+  // version of this did) throws "Response body is already used", and because the
+  // error was swallowed by the catch the checkpoint silently never cached.
+  const forCache = cacheName && 'caches' in window ? res.clone() : null;
+
+  const cacheWrite = (async () => {
+    if (!forCache || !cacheName) return;
+    try {
+      const cache = await caches.open(cacheName);
+      await cache.put(url, forCache);
+      const n = (await cache.keys()).length;
+      logger.info('main', `cached ${url.split('/').pop()} (${n} entries in ${cacheName})`);
+    } catch (e) {
+      // Never fail the load because caching failed; the model is already here.
+      logger.warn('main', `cache write failed for ${url}: ${e}`);
+    }
+  })();
 
   const total = Number(res.headers.get('content-length') ?? '0');
-  if (!res.body) return res.arrayBuffer();
+  if (!res.body) {
+    const buf = await res.arrayBuffer();
+    await cacheWrite;
+    return buf;
+  }
 
   const reader = res.body.getReader();
 
@@ -174,7 +193,9 @@ export async function fetchWithProgress(
     }
     // A short read (connection dropped) must not leave a zero tail, which would
     // decode as real weights. Hand back exactly the bytes that arrived.
-    return off === out.length ? out.buffer : out.subarray(0, off).buffer;
+    const buf = off === out.length ? out.buffer : out.subarray(0, off).buffer;
+    await cacheWrite;
+    return buf;
   }
 
   const chunks: Uint8Array[] = [];
@@ -189,6 +210,7 @@ export async function fetchWithProgress(
   const out = new Uint8Array(loaded);
   let off = 0;
   for (const c of chunks) { out.set(c, off); off += c.byteLength; }
+  await cacheWrite;
   return out.buffer;
 }
 
