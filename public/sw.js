@@ -19,34 +19,44 @@
  *   * same-origin static: cache-first.
  */
 
-const VERSION = 'v3';
+const VERSION = 'v4';
 const CORE = `naso-llm-core-${VERSION}`;
 const MODEL = 'naso-llm-models-v1';
 const RUNTIME = `naso-llm-runtime-${VERSION}`;
 const KEEP = new Set([CORE, MODEL, RUNTIME]);
 
+/**
+ * The app is not always served from a domain root: GitHub Pages serves it from
+ * https://<owner>.github.io/<repo>/, so a hardcoded '/kernels/x' would 404 and
+ * silently break the shell cache. BASE is derived from the worker's own URL
+ * (`/naso-llm/sw.js` -> `/naso-llm/`, `/sw.js` -> `/`), so the same file is
+ * correct under every base without a build-time substitution.
+ */
+const BASE = new URL('./', self.location.href).pathname;
+const at = (p) => new URL(p.replace(/^\//, ''), new URL(BASE, self.location.origin)).pathname;
+
 // The shell. Kept exact: everything listed must be fetchable at install time, or
 // the worker should fail loudly rather than half-cache.
 const CORE_ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/favicon.svg',
-  '/matmul.wgsl',
-  '/matmul_i8.wgsl',
-  '/pkg/nasoc_wasm.js',
-  '/pkg/nasoc_wasm_bg.wasm',
-  '/kernels/quantize_int8.naso',
-  '/kernels/quantize_int8_symmetric.wgsl',
-  '/kernels/quantize_int8_symmetric.abi.json',
-  '/kernels/dequantize_int8_symmetric.wgsl',
-  '/kernels/dequantize_int8_symmetric.abi.json',
-  '/kernels/scale_clamp_f32.wgsl',
-  '/kernels/scale_clamp_f32.abi.json',
-  '/kernels/silu_f32.wgsl',
-  '/kernels/silu_f32.abi.json',
-  '/kernels/relu_scale_f32.wgsl',
-  '/kernels/relu_scale_f32.abi.json',
+  at('/'),
+  at('/index.html'),
+  at('/manifest.json'),
+  at('/favicon.svg'),
+  at('/matmul.wgsl'),
+  at('/matmul_i8.wgsl'),
+  at('/pkg/nasoc_wasm.js'),
+  at('/pkg/nasoc_wasm_bg.wasm'),
+  at('/kernels/quantize_int8.naso'),
+  at('/kernels/quantize_int8_symmetric.wgsl'),
+  at('/kernels/quantize_int8_symmetric.abi.json'),
+  at('/kernels/dequantize_int8_symmetric.wgsl'),
+  at('/kernels/dequantize_int8_symmetric.abi.json'),
+  at('/kernels/scale_clamp_f32.wgsl'),
+  at('/kernels/scale_clamp_f32.abi.json'),
+  at('/kernels/silu_f32.wgsl'),
+  at('/kernels/silu_f32.abi.json'),
+  at('/kernels/relu_scale_f32.wgsl'),
+  at('/kernels/relu_scale_f32.abi.json'),
 ];
 
 self.addEventListener('install', (event) => {
@@ -121,7 +131,7 @@ self.addEventListener('fetch', (event) => {
   // A navigation goes to the network first so a new deploy is picked up, then to
   // the cached shell for offline.
   if (request.mode === 'navigate') {
-    event.respondWith(networkFirst(request, RUNTIME, '/index.html'));
+    event.respondWith(networkFirst(request, RUNTIME, at('/index.html')));
     return;
   }
 

@@ -378,6 +378,10 @@ function populateModels() {
 }
 
 async function boot() {
+  // Disarm the index.html boot watchdog on the first line: the bundle has
+  // demonstrably executed, so any later slowness is progress the UI reports
+  // itself, not a silent failure.
+  window.clearTimeout((window as any).__nasoWatchdog);
   populateModels();
   logger.info('main', 'booting');
 
@@ -419,11 +423,22 @@ async function boot() {
   });
 
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').then(
+    // Register relative to the page, not '/sw.js': the deployed app lives under
+    // a repo subpath on GitHub Pages, where a root-absolute URL 404s and offline
+    // support silently never activates.
+    const swUrl = new URL('./sw.js', document.baseURI).href;
+    navigator.serviceWorker.register(swUrl).then(
       () => logger.info('main', 'service worker registered (offline cache ready)'),
       (e) => logger.warn('main', `service worker registration failed: ${e}`),
     );
   }
+
+  // Watchdog: boot() sets window.__nasoBooted on its first line. If the page is
+  // still grey after this long the bundle never executed at all (a 404 under the
+  // deployed base path, a syntax error, ...) -- the exact silent failure this UI
+  // was reported for. index.html owns the timer because code in this file cannot
+  // report its own absence; here we only disarm it.
+  window.clearTimeout((window as any).__nasoWatchdog);
 
   // Auto-start the default model so the demo is one click, not four.
   void loadModel();
