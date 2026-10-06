@@ -135,6 +135,11 @@ async function loadModel() {
 
     loaded = true;
     setDot('dot-model', 'ok');
+    // The forward pass is ready the moment the model is, on whichever backend
+    // the label states (here "cpu f32"). Leaving this grey until the first
+    // generation reads as "something is broken" when nothing is, which is
+    // exactly how this was first reported.
+    setDot('dot-gpu', 'ok');
     phase(`${config.name} · ready`);
     $<HTMLTextAreaElement>('input').disabled = false;
     $<HTMLButtonElement>('send').disabled = false;
