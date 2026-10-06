@@ -107,6 +107,9 @@ if (existsSync(join(MODEL_DIR, 'model.safetensors')) && existsSync(join(MODEL_DI
 // 7. backend findings
 step('backend-findings', () => ({ ok: run('node', [join(root, 'tools', 'probe-backend.mjs')]), note: 'documented limitations still hold' }));
 
+// 8. safetensors decode equivalence (bf16/f16 bit-identical over the full domain)
+step('decode', () => ({ ok: run('node', [join(root, 'scripts', 'verify-decode.mjs')]), note: 'bit-identical over 2^16' }));
+
 const failed = results.filter(r => !r.ok);
 console.log('\n' + '─'.repeat(60));
 for (const r of results) console.log(`  ${r.ok ? 'ok  ' : 'FAIL'} ${r.name}${r.skipped ? ' (skipped)' : ''}${r.note ? `  ${r.note}` : ''}`);

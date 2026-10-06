@@ -11,7 +11,7 @@ import { logger } from './logger.js';
 import { initNaso, compileKernel } from './naso.js';
 import { KERNEL_SPECS, loadKernelSource } from './kernels.js';
 import { webgpuEngine } from './webgpu.js';
-import { parseSafetensors, type Tensor } from './model.js';
+import { parseSafetensors, fetchWithProgress, fetchWithRetry, type Tensor } from './model.js';
 import { BPETokenizer, type ChatMessage } from './tokenizer.js';
 import { createKVCache, prefill, decodeFrom, type KVCache } from './generate.js';
 import { quantizeRows, quantError, packedBytes, type QuantizedMatrix } from './quantize.js';
@@ -55,41 +55,21 @@ function setDot(id: string, state: 'idle' | 'ok' | 'err' | 'busy') {
 // ---------------------------------------------------------------------------
 // model loading
 // ---------------------------------------------------------------------------
-async function fetchWithProgress(
-  url: string,
-  onProgress: (loaded: number, total: number) => void,
-): Promise<ArrayBuffer> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`GET ${url} -> HTTP ${res.status}`);
-  const total = Number(res.headers.get('content-length') ?? '0');
-  if (!res.body) return res.arrayBuffer();
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let loaded = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    loaded += value.byteLength;
-    onProgress(loaded, total);
-  }
-  const out = new Uint8Array(loaded);
-  let off = 0;
-  for (const c of chunks) { out.set(c, off); off += c.byteLength; }
-  return out.buffer;
-}
+// `fetchWithProgress` and the safetensors reader live in model.ts, where the
+// decode path is unit-tested; main.ts only wires them to the UI.
 
 async function loadModel() {
   const btn = $<HTMLButtonElement>('load');
   const bar = $('progress').firstElementChild as HTMLElement;
   btn.disabled = true;
   setDot('dot-model', 'busy');
-  $('model-state').textContent = 'loading…';
+  const t0 = performance.now();
+  const phase = (text: string) => { $('model-state').textContent = text; };
 
   try {
     // config.json drives the architecture and is fetched rather than hardcoded,
     // so the two cannot drift apart.
-    const cfgRes = await fetch(`${HF_BASE}/${config.repo}/resolve/main/config.json`);
+    const cfgRes = await fetchWithRetry(`${HF_BASE}/${config.repo}/resolve/main/config.json`);
     if (!cfgRes.ok) throw new Error(`config.json -> HTTP ${cfgRes.status}`);
     const c = await cfgRes.json() as Record<string, number>;
     config = {
@@ -107,14 +87,28 @@ async function loadModel() {
 
     const weightsUrl = `${HF_BASE}/${config.repo}/resolve/main/model.safetensors`;
     logger.info('main', `fetching ${weightsUrl}`);
-    const buf = await fetchWithProgress(weightsUrl, (loaded_, total) => {
+    phase('downloading…');
+    let buf: ArrayBuffer | null = await fetchWithProgress(weightsUrl, (loaded_, total) => {
       bar.style.width = `${total ? ((loaded_ / total) * 100).toFixed(1) : 0}%`;
-      $('model-state').textContent = `${(loaded_ / 1e6).toFixed(0)}/${(total / 1e6).toFixed(0)} MB`;
+      phase(`downloading ${(loaded_ / 1e6).toFixed(0)}/${(total / 1e6).toFixed(0)} MB`);
     });
-    tensors = Object.fromEntries(parseSafetensors(buf));
+    logger.info('main', `downloaded ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+
+    phase('decoding…');
+    const tDecode = performance.now();
+    tensors = Object.fromEntries(parseSafetensors(buf, (done, total) => {
+      bar.style.width = `${((done / total) * 100).toFixed(1)}%`;
+      // Only touch the DOM a few times; a text write per tensor is noise.
+      if (done % 24 === 0 || done === total) phase(`decoding ${done}/${total} tensors`);
+    }));
+    logger.info('main', `decoded ${Object.keys(tensors).length} tensors in ${((performance.now() - tDecode) / 1000).toFixed(1)}s`);
+    // The raw checkpoint is dead weight once the tensors are decoded (each byte
+    // of bf16 became four, so the decoded form is what matters). Dropping the
+    // reference now lets the GC reclaim 269 MB before the quantisation pass.
+    buf = null;
     logger.success('main', `parsed ${Object.keys(tensors).length} tensors`);
 
-    const tokRes = await fetch(`${HF_BASE}/${config.repo}/resolve/main/tokenizer.json`);
+    const tokRes = await fetchWithRetry(`${HF_BASE}/${config.repo}/resolve/main/tokenizer.json`);
     if (!tokRes.ok) throw new Error(`tokenizer.json -> HTTP ${tokRes.status}`);
     tokenizer = BPETokenizer.fromJSON(await tokRes.json());
     logger.success('main', `tokenizer ready: vocab ${tokenizer.size}, eos ${tokenizer.eosId}`);
@@ -141,13 +135,18 @@ async function loadModel() {
 
     loaded = true;
     setDot('dot-model', 'ok');
-    $('model-state').textContent = config.name;
+    phase(`${config.name} · ready`);
     $<HTMLTextAreaElement>('input').disabled = false;
     $<HTMLButtonElement>('send').disabled = false;
+    $('load-note').textContent = 'Model loaded. Everything runs in this tab — no server, no API key. Reloads are served from the offline cache.';
+    logger.success('main', `ready in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
   } catch (e) {
     setDot('dot-model', 'err');
-    $('model-state').textContent = 'load failed';
+    phase('load failed — press Load model to retry');
     logger.error('main', `model load failed: ${e}`);
+    // A failed load must be recoverable from the page: the common cause is a
+    // transient network/rate-limit failure, not a broken model.
+    $<HTMLButtonElement>('load').textContent = 'Retry load';
   } finally {
     btn.disabled = false;
     bar.style.width = '0';
@@ -342,7 +341,7 @@ async function send() {
       body.textContent = '(no tokens — raise max tokens or rephrase)';
     }
     logger.info('main', `${ids.length} tokens; ${cache.pos}/${cache.maxSeq} positions used`);
-    setDot('dot-gpu', loaded ? 'ok' : 'idle');
+    setDot('dot-gpu', 'ok');
   } catch (e) {
     logger.error('main', `generation failed: ${e}`);
     body.textContent = `error: ${e}`;
@@ -395,10 +394,10 @@ async function boot() {
   try {
     const ok = await webgpuEngine.init();
     setDot('dot-gpu', ok ? 'ok' : 'idle');
-    $('gpu-state').textContent = ok ? 'gpu ready' : 'cpu';
+    $('gpu-state').textContent = ok ? 'wgpu' : 'cpu f32';
     $('hint').textContent = ok
       ? 'WebGPU device ready. The forward pass still runs on the CPU in f32 in this build — the Naso kernels are compiled and validated here, but their dispatch is not yet wired into generation (see README).'
-      : 'No WebGPU adapter: the chat runs on the CPU. The Naso kernels are still compiled by the WASM compiler in this tab.';
+      : 'Running on the CPU (f32) — this container has no WebGPU adapter. The Naso kernels are still compiled and validated by the WASM compiler in this tab.';
   } catch (e) {
     setDot('dot-gpu', 'err');
     logger.error('webgpu', `init failed: ${e}`);

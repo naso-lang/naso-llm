@@ -28,8 +28,10 @@ npm run chat -- "What is the capital of France?"
 | Real offline | service worker caches the 269 MB checkpoint, tokenizer, `.naso` sources and WASM |
 
 Measured on this container (2 cores, no GPU): **~6.5 tokens/s** decode, ~1.6 s to
-prefill a follow-up turn. A laptop GPU would be faster; see *Limitations* for why
-the GPU is not in the generation path yet.
+prefill a follow-up turn, and **~5 s from navigation to a ready model** (the
+checkpoint is cached after the first visit, so later loads only re-read it).
+A laptop GPU would be faster; see *Limitations* for why the GPU is not in the
+generation path yet.
 
 ## What Naso actually contributes
 
@@ -87,6 +89,18 @@ against itself. `npm run verify` runs all of them.
 | 9 | int8 accuracy cost | the f32 model | cosine **0.99956**, top-1 and top-5 preserved |
 | 10 | incremental chat context | a full re-render of the same conversation | **0.0 — bit-identical** |
 | 11 | browser WGSL == native WGSL | byte comparison | identical |
+| 12 | bf16 / f16 decode | frozen float reference, full 2^16 domain | **0 mismatches** |
+| 13 | service-worker revisit | second visit with the same profile | model green both times |
+
+Check 12 exists because the load path was slow enough to be unusable: the bf16
+widener allocated two `ArrayBuffer`s **per element**, which on a 134.5M-element
+checkpoint is 269M allocations — measured at ~54 s of the ~75 s load. Replacing
+it with an integer bit-shift took the whole checkpoint from 54 s to 0.3 s
+(171×). The check sweeps **every** 16-bit pattern rather than sampling, and it
+immediately caught a real off-by-one in the f16 subnormal exponent, so it is not
+decoration. `npm run diag:load` re-measures cold vs warm load in a real browser,
+and `npm run verify:sw` loads twice with one profile, because a model that only
+ever works on the *first* visit is a failure mode a single-visit test cannot see.
 
 Check 10 is the one that matters for the chat: the UI keeps the KV cache across
 turns and only feeds the new text, so it must be indistinguishable from rendering
@@ -219,6 +233,22 @@ Both findings are reproduced by `npm run probe` (`tools/probe-backend.mjs`).
   rather than pretending otherwise.
 * **~6.5 tok/s.** Two CPU cores. `Int8Array` accumulation is *slower* than f32 in
   V8 (measured: 0.11 vs 1.6 GFLOPS), so int8 pays off in size, not CPU speed.
+* **The first visit really does download 269 MB**, and no amount of code makes
+  that smaller. The checkpoint is bf16; decoding to f32 is what makes the model
+  usable, and that decode is now 0.3 s instead of 54 s. A warm visit still
+  re-reads and re-decodes the whole checkpoint from the cache (~5 s here) because
+  the parsed tensors are not persisted anywhere — Cache Storage holds opaque
+  response bodies, not structured data. Persisting the decoded/quantised form
+  (e.g. to OPFS) would remove those seconds, and is the obvious next step if the
+  warm load matters more than the code it would add.
+* **Hugging Face rate-limits the endpoint that serves the checkpoint** (3000
+  requests / 300 s per client). Repeated cold loads from one IP can trip it, and
+  a tripped limit reaches the page as a bare `TypeError: Failed to fetch`, which
+  looks exactly like a broken demo. The loader now retries with backoff and, if it
+  still fails, says what happened and leaves a working **Retry load** button
+  instead of a dead red dot. It cannot remove the limit — only report it honestly
+  and let you retry. Caching the checkpoint after the first successful load is
+  what keeps this from mattering on a normal visit.
 * **One model is wired up.** SmolLM2-135M-Instruct is what is verified end to end.
   The config list in `src/types.ts` also carries `tiny-random-LlamaForCausalLM`, a
   tiny complete Llama used as a fixture. Larger checkpoints would load — the
