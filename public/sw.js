@@ -1,38 +1,39 @@
 /**
- * Service worker: make the app work offline after the first visit.
+ * Service worker: make the chat work offline after the first visit.
  *
  * Three caches, because the three kinds of asset have different lifetimes:
  *
- *   CORE    the shell: index.html, the bundled JS, the WASM compiler, the
- *           .naso sources, the golden reference. Versioned with the build, so a
- *           deploy replaces it wholesale. Precached on install.
- *   MODEL   the checkpoint weights (model.safetensors, tokenizer.json) fetched
- *           from Hugging Face. Large and immutable, so kept across deploys.
- *   KERNELS the compiler artefacts. Kept across deploys too, since they are
- *           derived and cheap to regenerate.
+ *   CORE    the shell: index.html, the bundled JS, the WASM compiler, the .naso
+ *           sources, the hand-written matmul shaders. Versioned with the build,
+ *           so a deploy replaces it wholesale. Precached on install.
+ *   MODEL   the checkpoint weights and tokenizer from Hugging Face. Large (269 MB
+ *           for SmolLM2-135M) and immutable, so kept across deploys -- losing it
+ *           would mean re-downloading a quarter-gigabyte.
+ *   RUNTIME everything else same-origin: cache-first with a background refresh.
  *
- * The strategy per request:
- *   * cross-origin (the Hugging Face checkpoint): cache-first. It is immutable
- *     and re-downloading 4 MB on every run would defeat the point.
- *   * navigation: network-first, falling back to the cached shell, so a deploy
- *     is picked up online but the app still opens offline.
- *   * same-origin static: cache-first with a background refresh.
+ * Strategy per request:
+ *   * cross-origin (the Hugging Face checkpoint): cache-first, never revalidate.
+ *     This is what makes a second visit and every later conversation offline.
+ *   * navigation: network-first with the cached shell as fallback, so a deploy is
+ *     picked up while online but the app still opens offline.
+ *   * same-origin static: cache-first.
  */
 
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CORE = `naso-llm-core-${VERSION}`;
 const MODEL = 'naso-llm-models-v1';
 const RUNTIME = `naso-llm-runtime-${VERSION}`;
 const KEEP = new Set([CORE, MODEL, RUNTIME]);
 
-// The shell. Kept small and exact: everything here must be fetchable at install
-// time or the worker should fail loudly rather than half-cache.
+// The shell. Kept exact: everything listed must be fetchable at install time, or
+// the worker should fail loudly rather than half-cache.
 const CORE_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
   '/favicon.svg',
-  '/golden.json',
+  '/matmul.wgsl',
+  '/matmul_i8.wgsl',
   '/pkg/nasoc_wasm.js',
   '/pkg/nasoc_wasm_bg.wasm',
   '/kernels/quantize_int8.naso',
@@ -48,12 +49,12 @@ const CORE_ASSETS = [
   '/kernels/relu_scale_f32.abi.json',
 ];
 
-self.addEventListener('install', event => {
+self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CORE);
-    // Cache each asset individually so one 404 does not abort the whole install
-    // and leave a half-populated shell.
-    await Promise.all(CORE_ASSETS.map(async url => {
+    // Cache each asset individually so one 404 does not abort the install and
+    // leave a half-populated shell.
+    await Promise.all(CORE_ASSETS.map(async (url) => {
       try {
         const res = await fetch(url, { cache: 'reload' });
         if (res.ok) await cache.put(url, res);
@@ -66,10 +67,10 @@ self.addEventListener('install', event => {
   })());
 });
 
-self.addEventListener('activate', event => {
+self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
-    await Promise.all(names.filter(n => !KEEP.has(n)).map(n => caches.delete(n)));
+    await Promise.all(names.filter((n) => !KEEP.has(n)).map((n) => caches.delete(n)));
     await self.clients.claim();
   })());
 });
@@ -102,14 +103,14 @@ async function networkFirst(request, cacheName, fallback) {
   }
 }
 
-self.addEventListener('fetch', event => {
+self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
 
-  // Hugging Face checkpoint: immutable and large, so cache-first and never
-  // revalidate. This is what makes a second run offline.
+  // Hugging Face: the checkpoint and tokenizer are immutable and large, so
+  // cache-first and never revalidate.
   if (url.origin === 'https://huggingface.co' || url.hostname.endsWith('.hf.co')) {
     event.respondWith(cacheFirst(request, MODEL));
     return;
@@ -117,8 +118,8 @@ self.addEventListener('fetch', event => {
 
   if (url.origin !== self.location.origin) return;
 
-  // A navigation goes to the network first so a new deploy is picked up, then
-  // to the cached shell for offline.
+  // A navigation goes to the network first so a new deploy is picked up, then to
+  // the cached shell for offline.
   if (request.mode === 'navigate') {
     event.respondWith(networkFirst(request, RUNTIME, '/index.html'));
     return;
@@ -128,13 +129,15 @@ self.addEventListener('fetch', event => {
 });
 
 // The page can ask the worker to warm the model cache, or to clear it.
-self.addEventListener('message', event => {
+self.addEventListener('message', (event) => {
   const data = event.data;
   if (!data || typeof data !== 'object') return;
 
   if (data.type === 'CACHE_MODEL' && data.url) {
     event.waitUntil((async () => {
       const cache = await caches.open(MODEL);
+      // The body is streamed to disk by the browser, never buffered here, so a
+      // 269 MB checkpoint does not have to fit in memory as one ArrayBuffer.
       const res = await fetch(data.url);
       if (res.ok) await cache.put(data.url, res);
       event.source?.postMessage({ type: 'MODEL_CACHED', url: data.url, ok: res.ok });
@@ -142,6 +145,6 @@ self.addEventListener('message', event => {
   }
 
   if (data.type === 'CLEAR_CACHE') {
-    event.waitUntil(caches.keys().then(names => Promise.all(names.map(n => caches.delete(n)))));
+    event.waitUntil(caches.keys().then((names) => Promise.all(names.map((n) => caches.delete(n)))));
   }
 });

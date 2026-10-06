@@ -6,8 +6,9 @@
  *   2. kernels            compile via the native compiler
  *   3. wgsl validation    naga parse + validate of every generated shader
  *   4. bridge equivalence browser-compiled WGSL == native WGSL
- *   5. forward pass       src/llama.ts vs the NumPy reference
- *   6. backend findings   the two documented limitations still hold
+ *   5. tokenizer          src/tokenizer.ts vs HF `tokenizers` reference ids
+ *   6. forward pass       full-sequence, KV-cache and int8 paths vs NumPy
+ *   7. backend findings   the two documented limitations still hold
  *
  * Steps that need the naso repo or a built validator are skipped with a clear
  * note rather than failing, so this runs on a machine that only has Node.
@@ -21,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NASO_REPO = process.env.NASO_REPO ?? '/home/node/naso';
-const MODEL_DIR = process.env.NASO_MODEL_DIR ?? '/var/tmp/tiny';
+const MODEL_DIR = process.env.NASO_MODEL_DIR ?? '/var/tmp/smol';
 
 const results = [];
 function step(name, fn) {
@@ -53,12 +54,15 @@ const validator = process.env.WGSL_VALIDATE ?? '/var/tmp/cargo-target-wgsl/relea
 const kernelDir = join(root, 'public', 'kernels');
 if (existsSync(validator) && existsSync(kernelDir)) {
   step('wgsl-validate', () => {
-    const shaders = readdirSync(kernelDir).filter(f => f.endsWith('.wgsl'));
+    const shaders = [
+      ...readdirSync(kernelDir).filter(f => f.endsWith('.wgsl')).map(f => join(kernelDir, f)),
+      ...['matmul.wgsl', 'matmul_i8.wgsl'].map(f => join(root, 'public', f)),
+    ].filter(existsSync);
     let ok = true;
     for (const f of shaders) {
-      const r = spawnSync(validator, [join(kernelDir, f)], { cwd: root, encoding: 'utf8' });
+      const r = spawnSync(validator, [f], { cwd: root, encoding: 'utf8' });
       if (r.status !== 0) { ok = false; console.error(r.stderr); }
-      else console.log(`  valid: ${f}`);
+      else console.log(`  valid: ${f.replace(root + '/', '')}`);
     }
     return { ok, note: `${shaders.length} shaders via naga` };
   });
@@ -70,7 +74,18 @@ if (existsSync(validator) && existsSync(kernelDir)) {
 // 4. bridge equivalence
 step('bridge', () => ({ ok: run('node', [join(root, 'tools', 'verify_bridge.mjs')]), note: 'wasm == native WGSL' }));
 
-// 5. forward pass vs numpy: bundle the TS harness with esbuild, then run it.
+// 5. tokenizer vs the HF `tokenizers` reference
+const tokFile = join(MODEL_DIR, 'tokenizer.json');
+const oracleFile = process.env.NASO_TOK_ORACLE ?? (existsSync('/var/tmp/tok_oracle.json') ? '/var/tmp/tok_oracle.json' : join(root, 'tools', 'reference', 'tok_oracle.json'));
+if (existsSync(tokFile) && existsSync(oracleFile)) {
+  step('tokenizer', () => ({ ok: run('node', [join(root, 'tools', 'verify_tokenizer.mjs'), tokFile, oracleFile]), note: 'vs HF tokenizers' }));
+} else {
+  console.log(`\n=== tokenizer ===\nskipped: need ${tokFile} and ${oracleFile}`);
+  console.log('  run: python3 tools/tokenizer_oracle.py /var/tmp/smol/tokenizer.json /var/tmp/tok_oracle.json');
+  results.push({ name: 'tokenizer', ok: true, skipped: true });
+}
+
+// 6. forward pass vs numpy: bundle the TS harness with esbuild, then run it.
 if (existsSync(join(MODEL_DIR, 'model.safetensors')) && existsSync(join(MODEL_DIR, 'ref_logits.npy'))) {
   step('forward-vs-numpy', () => {
     const out = join(MODEL_DIR, 'verify_forward.mjs');
@@ -89,7 +104,7 @@ if (existsSync(join(MODEL_DIR, 'model.safetensors')) && existsSync(join(MODEL_DI
   results.push({ name: 'forward-vs-numpy', ok: true, skipped: true });
 }
 
-// 6. backend findings
+// 7. backend findings
 step('backend-findings', () => ({ ok: run('node', [join(root, 'tools', 'probe-backend.mjs')]), note: 'documented limitations still hold' }));
 
 const failed = results.filter(r => !r.ok);

@@ -95,6 +95,32 @@ export interface ModelConfig {
 }
 
 export const MODELS: ModelConfig[] = [
+  /**
+   * The chat model. 135M params, real instruct tuning (SmolLM2's SFT+DPO mix),
+   * ChatML template, tied embeddings. 269 MB in bf16, which is small enough to
+   * cache for offline use and small enough to run client-side. GQA (9 query
+   * heads, 3 KV heads) and rope_theta 100000 are both non-default, so this
+   * exercises the same code paths a larger Llama would.
+   */
+  {
+    id: 'smollm2-135m-instruct',
+    name: 'SmolLM2-135M-Instruct',
+    repo: 'HuggingFaceTB/SmolLM2-135M-Instruct',
+    hiddenSize: 576,
+    intermediateSize: 1536,
+    numLayers: 30,
+    numHeads: 9,
+    numKvHeads: 3,
+    vocabSize: 49152,
+    rmsNormEps: 1e-5,
+    ropeTheta: 100000.0,
+    weightsBytes: 269060552,
+  },
+  /**
+   * The quantisation-kernel fixture: a complete Llama architecture at tiny
+   * dimensions. Used to exercise Naso's WGSL kernels and the byte-exact
+   * browser-vs-native compile check without a 269 MB download.
+   */
   {
     id: 'tiny-random-llama',
     name: 'tiny-random-LlamaForCausalLM (2 layers, hidden 16)',
@@ -110,5 +136,11 @@ export const MODELS: ModelConfig[] = [
     weightsBytes: 4131280,
   },
 ];
+
+/** The model the chat UI loads by default. */
+export const DEFAULT_MODEL = MODELS[0];
+
+/** Context window used by the chat demo (tokens kept in the KV cache). */
+export const CHAT_MAX_SEQ = 1024;
 
 export const HF_BASE = 'https://huggingface.co';

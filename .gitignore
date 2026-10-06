@@ -18,3 +18,5 @@ node_modules/
 # model files are fetched at runtime and cached by the service worker
 *.safetensors
 *.npy
+# ... except the small committed reference data the checks compare against.
+!tools/reference/*.npy

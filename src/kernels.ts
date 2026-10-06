@@ -4,8 +4,8 @@
  * The canonical Naso sources live in `kernels/*.naso` at the repo root.
  * `scripts/compile-kernels.js` copies them to `public/kernels/` so they are
  * served (and cached by the service worker), and this module fetches them at
- * runtime. That keeps the .naso file the single source of truth: the shader
- * the browser runs is compiled from the same text a reviewer reads.
+ * runtime. That keeps the .naso file the single source of truth: the shader the
+ * browser runs is compiled from the same text a reviewer reads.
  */
 
 export interface KernelSpec {
@@ -48,16 +48,16 @@ export const KERNEL_SPECS: KernelSpec[] = [
 const sourceCache = new Map<string, string>();
 
 /** Fetch a kernel source file, caching the text in memory. */
-export async function loadKernelSource(file: string): Promise<string> {
-  const cached = sourceCache.get(file);
+export async function loadKernelSource(spec: KernelSpec): Promise<string> {
+  const cached = sourceCache.get(spec.file);
   if (cached !== undefined) return cached;
 
-  // The service worker serves this from cache when offline; the network is
-  // only hit on the first load.
-  const url = new URL(`kernels/${file}`, document.baseURI).href;
+  // The service worker serves this from cache when offline; the network is only
+  // hit on the first load.
+  const url = new URL(`kernels/${spec.file}`, document.baseURI).href;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`failed to load ${url}: HTTP ${res.status}`);
   const text = await res.text();
-  sourceCache.set(file, text);
+  sourceCache.set(spec.file, text);
   return text;
 }

@@ -1,0 +1,675 @@
+{
+ "cases": [
+  {
+   "text": "",
+   "allowSpecial": false,
+   "ids": [],
+   "tokens": [],
+   "decoded": ""
+  },
+  {
+   "text": "hello",
+   "allowSpecial": false,
+   "ids": [
+    28120
+   ],
+   "tokens": [
+    "hello"
+   ],
+   "decoded": "hello"
+  },
+  {
+   "text": "Hello, world!",
+   "allowSpecial": false,
+   "ids": [
+    19556,
+    28,
+    905,
+    17
+   ],
+   "tokens": [
+    "Hello",
+    ",",
+    "Ġworld",
+    "!"
+   ],
+   "decoded": "Hello, world!"
+  },
+  {
+   "text": "The capital of France is",
+   "allowSpecial": false,
+   "ids": [
+    504,
+    3575,
+    282,
+    4649,
+    314
+   ],
+   "tokens": [
+    "The",
+    "Ġcapital",
+    "Ġof",
+    "ĠFrance",
+    "Ġis"
+   ],
+   "decoded": "The capital of France is"
+  },
+  {
+   "text": " Paris",
+   "allowSpecial": false,
+   "ids": [
+    7042
+   ],
+   "tokens": [
+    "ĠParis"
+   ],
+   "decoded": " Paris"
+  },
+  {
+   "text": "2 + 2 = 4",
+   "allowSpecial": false,
+   "ids": [
+    34,
+    1232,
+    216,
+    34,
+    446,
+    216,
+    36
+   ],
+   "tokens": [
+    "2",
+    "Ġ+",
+    "Ġ",
+    "2",
+    "Ġ=",
+    "Ġ",
+    "4"
+   ],
+   "decoded": "2 + 2 = 4"
+  },
+  {
+   "text": "1234567890",
+   "allowSpecial": false,
+   "ids": [
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    32
+   ],
+   "tokens": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "0"
+   ],
+   "decoded": "1234567890"
+  },
+  {
+   "text": "don't can't won't I'm you're we've they'll",
+   "allowSpecial": false,
+   "ids": [
+    12420,
+    982,
+    416,
+    982,
+    3763,
+    982,
+    339,
+    5248,
+    346,
+    2316,
+    392,
+    3543,
+    502,
+    3060
+   ],
+   "tokens": [
+    "don",
+    "'t",
+    "Ġcan",
+    "'t",
+    "Ġwon",
+    "'t",
+    "ĠI",
+    "'m",
+    "Ġyou",
+    "'re",
+    "Ġwe",
+    "'ve",
+    "Ġthey",
+    "'ll"
+   ],
+   "decoded": "don't can't won't I'm you're we've they'll"
+  },
+  {
+   "text": "    leading spaces",
+   "allowSpecial": false,
+   "ids": [
+    333,
+    2899,
+    5600
+   ],
+   "tokens": [
+    "ĠĠĠ",
+    "Ġleading",
+    "Ġspaces"
+   ],
+   "decoded": "    leading spaces"
+  },
+  {
+   "text": "trailing spaces    ",
+   "allowSpecial": false,
+   "ids": [
+    4861,
+    4966,
+    5600,
+    289
+   ],
+   "tokens": [
+    "tra",
+    "iling",
+    "Ġspaces",
+    "ĠĠĠĠ"
+   ],
+   "decoded": "trailing spaces    "
+  },
+  {
+   "text": "multiple     inner     spaces",
+   "allowSpecial": false,
+   "ids": [
+    30404,
+    289,
+    6210,
+    289,
+    5600
+   ],
+   "tokens": [
+    "multiple",
+    "ĠĠĠĠ",
+    "Ġinner",
+    "ĠĠĠĠ",
+    "Ġspaces"
+   ],
+   "decoded": "multiple     inner     spaces"
+  },
+  {
+   "text": "line one\nline two\n\nline three",
+   "allowSpecial": false,
+   "ids": [
+    1311,
+    582,
+    198,
+    1311,
+    827,
+    198,
+    198,
+    1311,
+    1296
+   ],
+   "tokens": [
+    "line",
+    "Ġone",
+    "Ċ",
+    "line",
+    "Ġtwo",
+    "Ċ",
+    "Ċ",
+    "line",
+    "Ġthree"
+   ],
+   "decoded": "line one\nline two\n\nline three"
+  },
+  {
+   "text": "\ttab\tseparated",
+   "allowSpecial": false,
+   "ids": [
+    197,
+    15999,
+    197,
+    19509,
+    483
+   ],
+   "tokens": [
+    "ĉ",
+    "tab",
+    "ĉ",
+    "separ",
+    "ated"
+   ],
+   "decoded": "\ttab\tseparated"
+  },
+  {
+   "text": "café naïve résumé",
+   "allowSpecial": false,
+   "ids": [
+    83,
+    1939,
+    2756,
+    15486,
+    46494,
+    412,
+    2756,
+    5422,
+    2756
+   ],
+   "tokens": [
+    "c",
+    "af",
+    "Ã©",
+    "Ġna",
+    "Ã¯ve",
+    "Ġr",
+    "Ã©",
+    "sum",
+    "Ã©"
+   ],
+   "decoded": "café naïve résumé"
+  },
+  {
+   "text": "日本語のテキスト",
+   "allowSpecial": false,
+   "ids": [
+    23274,
+    115,
+    40993,
+    179,
+    120,
+    248,
+    26453,
+    11100,
+    224,
+    10391,
+    251,
+    10391,
+    134,
+    11100,
+    226
+   ],
+   "tokens": [
+    "æĹ",
+    "¥",
+    "æľ¬",
+    "è",
+    "ª",
+    "ŀ",
+    "ãģ®",
+    "ãĥ",
+    "Ĩ",
+    "ãĤ",
+    "Ń",
+    "ãĤ",
+    "¹",
+    "ãĥ",
+    "Ī"
+   ],
+   "decoded": "日本語のテキスト"
+  },
+  {
+   "text": "emoji: 🚀🌍💡",
+   "allowSpecial": false,
+   "ids": [
+    391,
+    33777,
+    42,
+    15107,
+    244,
+    218,
+    10813,
+    230,
+    231,
+    10813,
+    236,
+    111
+   ],
+   "tokens": [
+    "em",
+    "oji",
+    ":",
+    "ĠðŁ",
+    "ļ",
+    "Ģ",
+    "ðŁ",
+    "Į",
+    "į",
+    "ðŁ",
+    "Ĵ",
+    "¡"
+   ],
+   "decoded": "emoji: 🚀🌍💡"
+  },
+  {
+   "text": "München — Straße",
+   "allowSpecial": false,
+   "ids": [
+    61,
+    47682,
+    7554,
+    1841,
+    19144,
+    34878,
+    85
+   ],
+   "tokens": [
+    "M",
+    "Ã¼n",
+    "chen",
+    "ĠâĢĶ",
+    "ĠStra",
+    "ÃŁ",
+    "e"
+   ],
+   "decoded": "München — Straße"
+  },
+  {
+   "text": "a1b2c3d4",
+   "allowSpecial": false,
+   "ids": [
+    81,
+    33,
+    82,
+    34,
+    83,
+    35,
+    84,
+    36
+   ],
+   "tokens": [
+    "a",
+    "1",
+    "b",
+    "2",
+    "c",
+    "3",
+    "d",
+    "4"
+   ],
+   "decoded": "a1b2c3d4"
+  },
+  {
+   "text": "Punctuation!!! ??? ... ;: []{}() <> @#$%^&*",
+   "allowSpecial": false,
+   "ids": [
+    64,
+    8859,
+    6584,
+    29646,
+    9148,
+    16693,
+    4563,
+    8544,
+    42,
+    4389,
+    6150,
+    1000,
+    2067,
+    46,
+    3394,
+    19,
+    20,
+    21,
+    78,
+    22,
+    26
+   ],
+   "tokens": [
+    "P",
+    "unct",
+    "uation",
+    "!!!",
+    "Ġ?",
+    "??",
+    "Ġ...",
+    "Ġ;",
+    ":",
+    "Ġ[]",
+    "{}",
+    "()",
+    "Ġ<",
+    ">",
+    "Ġ@",
+    "#",
+    "$",
+    "%",
+    "^",
+    "&",
+    "*"
+   ],
+   "decoded": "Punctuation!!! ??? ... ;: []{}() <> @#$%^&*"
+  },
+  {
+   "text": "def f(x):\n    return x * 2",
+   "allowSpecial": false,
+   "ids": [
+    1604,
+    275,
+    24,
+    104,
+    727,
+    472,
+    1003,
+    1792,
+    1672,
+    216,
+    34
+   ],
+   "tokens": [
+    "def",
+    "Ġf",
+    "(",
+    "x",
+    "):",
+    "ĊĠĠĠ",
+    "Ġreturn",
+    "Ġx",
+    "Ġ*",
+    "Ġ",
+    "2"
+   ],
+   "decoded": "def f(x):\n    return x * 2"
+  },
+  {
+   "text": "What is 17 * 23?",
+   "allowSpecial": false,
+   "ids": [
+    1780,
+    314,
+    216,
+    33,
+    39,
+    1672,
+    216,
+    34,
+    35,
+    47
+   ],
+   "tokens": [
+    "What",
+    "Ġis",
+    "Ġ",
+    "1",
+    "7",
+    "Ġ*",
+    "Ġ",
+    "2",
+    "3",
+    "?"
+   ],
+   "decoded": "What is 17 * 23?"
+  },
+  {
+   "text": "the quick brown fox jumps over the lazy dog",
+   "allowSpecial": false,
+   "ids": [
+    1195,
+    2365,
+    6354,
+    16438,
+    27003,
+    690,
+    260,
+    23790,
+    2767
+   ],
+   "tokens": [
+    "the",
+    "Ġquick",
+    "Ġbrown",
+    "Ġfox",
+    "Ġjumps",
+    "Ġover",
+    "Ġthe",
+    "Ġlazy",
+    "Ġdog"
+   ],
+   "decoded": "the quick brown fox jumps over the lazy dog"
+  },
+  {
+   "text": "THE QUICK BROWN FOX",
+   "allowSpecial": false,
+   "ids": [
+    15964,
+    30348,
+    27163,
+    389,
+    34559,
+    62,
+    23761,
+    72
+   ],
+   "tokens": [
+    "THE",
+    "ĠQU",
+    "ICK",
+    "ĠB",
+    "ROW",
+    "N",
+    "ĠFO",
+    "X"
+   ],
+   "decoded": "THE QUICK BROWN FOX"
+  },
+  {
+   "text": "MiXeD CaSe WoRdS",
+   "allowSpecial": false,
+   "ids": [
+    42300,
+    72,
+    85,
+    52,
+    7784,
+    4393,
+    408,
+    95,
+    66,
+    84,
+    67
+   ],
+   "tokens": [
+    "Mi",
+    "X",
+    "e",
+    "D",
+    "ĠCa",
+    "Se",
+    "ĠW",
+    "o",
+    "R",
+    "d",
+    "S"
+   ],
+   "decoded": "MiXeD CaSe WoRdS"
+  },
+  {
+   "text": "<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n",
+   "allowSpecial": true,
+   "ids": [
+    1,
+    4093,
+    198,
+    19556,
+    2,
+    198,
+    1,
+    520,
+    9531,
+    198
+   ],
+   "tokens": [
+    "<|im_start|>",
+    "user",
+    "Ċ",
+    "Hello",
+    "<|im_end|>",
+    "Ċ",
+    "<|im_start|>",
+    "ass",
+    "istant",
+    "Ċ"
+   ],
+   "decoded": "<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n"
+  },
+  {
+   "text": "<|im_start|>system\nYou are helpful.<|im_end|>\n<|im_start|>user\nHi<|im_end|>\n",
+   "allowSpecial": true,
+   "ids": [
+    1,
+    9690,
+    198,
+    2683,
+    359,
+    5356,
+    30,
+    2,
+    198,
+    1,
+    4093,
+    198,
+    26843,
+    2,
+    198
+   ],
+   "tokens": [
+    "<|im_start|>",
+    "system",
+    "Ċ",
+    "You",
+    "Ġare",
+    "Ġhelpful",
+    ".",
+    "<|im_end|>",
+    "Ċ",
+    "<|im_start|>",
+    "user",
+    "Ċ",
+    "Hi",
+    "<|im_end|>",
+    "Ċ"
+   ],
+   "decoded": "<|im_start|>system\nYou are helpful.<|im_end|>\n<|im_start|>user\nHi<|im_end|>\n"
+  },
+  {
+   "text": "<|im_end|>",
+   "allowSpecial": true,
+   "ids": [
+    2
+   ],
+   "tokens": [
+    "<|im_end|>"
+   ],
+   "decoded": "<|im_end|>"
+  }
+ ]
+}

@@ -14,11 +14,15 @@
     "preview": "vite preview --port 4173",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "compile:kernels": "node scripts/compile-kernels.js",
+    "chat": "node scripts/chat.mjs",
+    "tokenizer:oracle": "python3 tools/tokenizer_oracle.py /var/tmp/smol/tokenizer.json /var/tmp/tok_oracle.json",
     "verify": "node scripts/verify.mjs",
-    "verify:forward": "node -e \"import('./scripts/verify.mjs')\"",
+    "verify:forward": "node scripts/verify-forward.mjs",
+    "verify:tokenizer": "node tools/verify_tokenizer.mjs /var/tmp/smol/tokenizer.json /var/tmp/tok_oracle.json",
     "verify:bridge": "node tools/verify_bridge.mjs",
-    "validate:wgsl": "bash -c 'for f in public/kernels/*.wgsl; do ${WGSL_VALIDATE:-/var/tmp/cargo-target-wgsl/release/wgsl-validate} \"$f\"; done'",
+    "validate:wgsl": "bash -c 'for f in public/kernels/*.wgsl public/matmul*.wgsl; do ${WGSL_VALIDATE:-/var/tmp/cargo-target-wgsl/release/wgsl-validate} \"$f\"; done'",
     "probe": "node tools/probe-backend.mjs",
+    "probe:gpu": "node scripts/probe-gpu-matrix.mjs",
     "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {

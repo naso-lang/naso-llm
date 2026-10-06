@@ -1,126 +1,283 @@
 /**
- * Tokenizer file reader.
+ * Byte-level BPE tokenizer, ported from the Hugging Face `tokenizers` spec.
  *
- * This demo does not run a BPE encoder -- a correct one is a meaningful amount
- * of code and is orthogonal to the point being demonstrated (that Naso's
- * verified compiler produces the quantization kernels the GPU runs). What it
- * DOES do is read `tokenizer.json`, find the vocabulary, and decode. To feed
- * the model it needs token ids, so it uses the vocabulary's id<->token tables
- * directly:
+ * This is a real tokenizer, not a vocabulary lookup: it reproduces the exact
+ * pipeline declared in the model's `tokenizer.json` --
  *
- *   * `encodeSimple(text)` lower-cases and splits on word boundaries, maps each
- *     piece to a vocab id, and wraps the result in the model's BOS/EOS pair.
- *     This is a lookup, not a BPE merge -- it is exact for tokens already in the
- *     vocab and emits `<unk>` for the rest.
- *   * `decode(ids)` concatenates the vocabulary strings, which is what turns
- *     the final logits into a readable next token.
+ *   Sequence[
+ *     Digits(individual_digits = true),   // "123" -> "1","2","3"
+ *     ByteLevel(add_prefix_space=false, use_regex=true),
+ *   ]
+ *   BPE(ignore_merges=false)
  *
- * The limitation is stated here rather than hidden: any prompt whose tokens are
- * not literal vocabulary entries tokenizes as `<unk>`. That is enough to run a
- * forward pass and read a next token; it is not a general-purpose tokenizer.
+ * -- so the browser tokenises with no server round-trip, which is what lets the
+ * chat demo work offline. `tools/tokenizer_oracle.py` produces reference ids
+ * with the real Rust `tokenizers` library; `tools/verify_tokenizer.mjs` diffs
+ * this port against them over a fixed corpus.
  */
 
-export interface SimpleTokenizer {
-  vocab: Map<string, number>;
-  idToToken: string[];
-  bosId: number;
-  eosId: number;
-  unkId: number;
-  /** Encode by vocabulary lookup; see the caveat in the module comment. */
-  encodeSimple(text: string): number[];
-  decode(ids: number[]): string;
-  idFor(token: string): number | undefined;
-}
+/** GPT-2 pre-tokenization pattern (also used by Llama/Qwen/SmolLM). */
+const GPT2_SPLIT =
+  /'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
 
-interface AddedToken {
-  id?: number;
-  content?: string;
-}
+/**
+ * GPT-2's reversible byte -> printable-unicode map. All 256 byte values map to a
+ * single printable codepoint, so no token contains a character that survives
+ * badly through JSON or HTML.
+ */
+function buildByteMaps(): { byteToChar: string[]; charToByte: Map<string, number> } {
+  const bs: number[] = [];
+  for (let i = 0x21; i <= 0x7e; i++) bs.push(i); // '!'..'~'
+  for (let i = 0xa1; i <= 0xac; i++) bs.push(i); // '¡'..'¬'
+  for (let i = 0xae; i <= 0xff; i++) bs.push(i); // '®'..'ÿ'
 
-interface TokenizerJson {
-  model?: { vocab?: Record<string, number>; unk_token?: string };
-  added_tokens?: AddedToken[];
-  added_tokens_decoder?: Record<string, { content: string; special?: boolean }>;
-}
-
-/** Parse a tokenizer.json into a lookup-based tokenizer. */
-export function parseTokenizer(json: TokenizerJson): SimpleTokenizer {
-  const vocab = new Map<string, number>();
-  const idToToken: string[] = [];
-
-  // The base vocabulary: token string -> id.
-  if (json.model?.vocab) {
-    for (const [token, id] of Object.entries(json.model.vocab)) {
-      vocab.set(token, id);
-      idToToken[id] = token;
+  const cs = bs.slice();
+  let n = 0;
+  for (let b = 0; b < 256; b++) {
+    if (!bs.includes(b)) {
+      bs.push(b);
+      cs.push(256 + n);
+      n++;
     }
   }
 
-  // Added tokens may extend the vocabulary (new ids) or override an id's string
-  // (e.g. `<|endoftext|>`). Both are applied.
-  const added = json.added_tokens ?? [];
-  for (const at of added) {
-    if (at.content !== undefined && at.id !== undefined) {
-      vocab.set(at.content, at.id);
-      idToToken[at.id] = at.content;
+  const byteToChar: string[] = new Array(256);
+  const charToByte = new Map<string, number>();
+  for (let i = 0; i < bs.length; i++) {
+    const ch = String.fromCodePoint(cs[i]);
+    byteToChar[bs[i]] = ch;
+    charToByte.set(ch, bs[i]);
+  }
+  return { byteToChar, charToByte };
+}
+
+export interface TokenizerJSON {
+  model: { vocab: Record<string, number>; merges: string[] };
+  added_tokens?: Array<{ id: number; content: string; special?: boolean }>;
+}
+
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+export class BPETokenizer {
+  private readonly vocab: Map<string, number>;
+  private readonly ranks: Map<string, number>;
+  private readonly idToToken: string[];
+  private readonly byteToChar: string[];
+  private readonly charToByte: Map<string, number>;
+  /** Special strings (e.g. `<|im_start|>`) matched literally, longest first. */
+  private readonly specials: string[];
+  /** Token closing an assistant turn; generation stops on it. */
+  readonly eosId: number;
+  readonly imStartId: number;
+
+  private constructor(json: TokenizerJSON) {
+    const { byteToChar, charToByte } = buildByteMaps();
+    this.byteToChar = byteToChar;
+    this.charToByte = charToByte;
+
+    this.vocab = new Map(Object.entries(json.model.vocab));
+    const maxId = Math.max(...Object.values(json.model.vocab));
+    this.idToToken = new Array(maxId + 1);
+    for (const [tok, id] of this.vocab) this.idToToken[id] = tok;
+
+    this.ranks = new Map();
+    json.model.merges.forEach((m, i) => {
+      const sp = m.indexOf(' ');
+      this.ranks.set(m.slice(0, sp) + ' ' + m.slice(sp + 1), i);
+    });
+
+    const added = json.added_tokens ?? [];
+    for (const a of added) {
+      this.vocab.set(a.content, a.id);
+      this.idToToken[a.id] = a.content;
     }
-  }
-  if (json.added_tokens_decoder) {
-    for (const [idStr, info] of Object.entries(json.added_tokens_decoder)) {
-      const id = Number(idStr);
-      if (Number.isFinite(id)) idToToken[id] = info.content;
-    }
-  }
-
-  // Fill holes so idToToken is dense (some vocabs skip ids).
-  for (let i = 0; i < idToToken.length; i++) {
-    if (idToToken[i] === undefined) idToToken[i] = '';
+    this.specials = added
+      .filter((a) => a.special)
+      .map((a) => a.content)
+      .sort((a, b) => b.length - a.length);
+    this.eosId = this.vocab.get('<|im_end|>') ?? this.vocab.get('<|endoftext|>') ?? 2;
+    this.imStartId = this.vocab.get('<|im_start|>') ?? 0;
   }
 
-  const unkToken = json.model?.unk_token ?? '<unk>';
-  const unkId = vocab.get(unkToken) ?? 0;
-  const bosId = vocab.get('<s>') ?? vocab.get('<|begin_of_text|>') ?? vocab.get('<s>') ?? -1;
-  const eosId = vocab.get('</s>') ?? vocab.get('<|end_of_text|>') ?? vocab.get('<|endoftext|>') ?? -1;
+  static fromJSON(json: unknown): BPETokenizer {
+    return new BPETokenizer(json as TokenizerJSON);
+  }
 
-  return {
-    vocab,
-    idToToken,
-    bosId,
-    eosId,
-    unkId,
-    idFor(token: string) { return vocab.get(token); },
-    encodeSimple(text: string): number[] {
-      // A minimal word/punctuation split. Each piece is looked up directly; a
-      // piece not in the vocab becomes <unk>.
-      const pieces = text.match(/[A-Za-z]+|[0-9]+|[^\sA-Za-z0-9]/g) ?? [];
-      const ids: number[] = [];
-      if (bosId >= 0) ids.push(bosId);
-      for (const piece of pieces) {
-        const direct = vocab.get(piece);
-        if (direct !== undefined) { ids.push(direct); continue; }
-        const lowered = vocab.get(piece.toLowerCase());
-        if (lowered !== undefined) { ids.push(lowered); continue; }
-        // Try the "▁"-prefixed form SentencePiece maps a leading space to.
-        const sp = vocab.get(`\u2581${piece.toLowerCase()}`) ?? vocab.get(`\u2581${piece}`);
-        ids.push(sp ?? unkId);
+  /** Split into pre-tokens: Digits first, then GPT-2's byte-level rule. */
+  private preTokenize(text: string): string[] {
+    // Digits(individual_digits=true): each digit is its own pre-token.
+    const digitPieces: string[] = [];
+    let run = '';
+    for (const ch of text) {
+      if (ch >= '0' && ch <= '9') {
+        if (run) {
+          digitPieces.push(run);
+          run = '';
+        }
+        digitPieces.push(ch);
+      } else {
+        run += ch;
       }
-      return ids;
-    },
-    decode(ids: number[]): string {
-      let out = '';
-      for (const id of ids) {
-        const tok = idToToken[id];
-        if (tok !== undefined) out += tok;
+    }
+    if (run) digitPieces.push(run);
+
+    const out: string[] = [];
+    for (const piece of digitPieces) {
+      const words = piece.match(GPT2_SPLIT);
+      if (words) out.push(...words);
+      else if (piece) out.push(piece);
+    }
+    return out;
+  }
+
+  /** Greedy lowest-rank pair merging -- the reference BPE algorithm. */
+  private bpe(token: string): string[] {
+    let word = [...token];
+    if (word.length < 2) return word;
+
+    while (word.length > 1) {
+      let bestRank = Infinity;
+      let bestIndex = -1;
+      for (let i = 0; i < word.length - 1; i++) {
+        const rank = this.ranks.get(word[i] + ' ' + word[i + 1]);
+        if (rank !== undefined && rank < bestRank) {
+          bestRank = rank;
+          bestIndex = i;
+        }
       }
-      return out;
-    },
-  };
+      if (bestIndex === -1) break;
+
+      const pair = word[bestIndex] + ' ' + word[bestIndex + 1];
+      const merged: string[] = [];
+      for (let i = 0; i < word.length; ) {
+        if (i < word.length - 1 && word[i] + ' ' + word[i + 1] === pair) {
+          merged.push(word[i] + word[i + 1]);
+          i += 2;
+        } else {
+          merged.push(word[i]);
+          i += 1;
+        }
+      }
+      word = merged;
+    }
+    return word;
+  }
+
+  /** UTF-8 bytes of `text`, each mapped to its printable byte-level char. */
+  private toByteLevel(text: string): string {
+    const bytes = new TextEncoder().encode(text);
+    let out = '';
+    for (const b of bytes) out += this.byteToChar[b];
+    return out;
+  }
+
+  /**
+   * Encode `text`. Special tokens (the chat control strings) are matched
+   * literally when `allowSpecial` is set, so `<|im_start|>` becomes one id
+   * rather than nine byte-level merges.
+   */
+  encode(text: string, allowSpecial = false): number[] {
+    const ids: number[] = [];
+    const chunks: Array<{ text: string; special: boolean }> = [];
+    if (allowSpecial && this.specials.length) {
+      let rest = text;
+      while (rest) {
+        let hit = -1;
+        let hitTok = '';
+        for (const s of this.specials) {
+          const at = rest.indexOf(s);
+          if (at !== -1 && (hit === -1 || at < hit)) {
+            hit = at;
+            hitTok = s;
+          }
+        }
+        if (hit === -1) {
+          chunks.push({ text: rest, special: false });
+          break;
+        }
+        if (hit > 0) chunks.push({ text: rest.slice(0, hit), special: false });
+        chunks.push({ text: hitTok, special: true });
+        rest = rest.slice(hit + hitTok.length);
+      }
+    } else {
+      chunks.push({ text, special: false });
+    }
+
+    for (const chunk of chunks) {
+      if (chunk.special) {
+        const id = this.vocab.get(chunk.text);
+        if (id !== undefined) ids.push(id);
+        continue;
+      }
+      for (const word of this.preTokenize(chunk.text)) {
+        for (const sym of this.bpe(this.toByteLevel(word))) {
+          const id = this.vocab.get(sym);
+          if (id !== undefined) ids.push(id);
+        }
+      }
+    }
+    return ids;
+  }
+
+  /** Decode ids to text (byte-level chars -> bytes -> UTF-8). */
+  decode(ids: number[]): string {
+    let byteStr = '';
+    for (const id of ids) {
+      const tok = this.idToToken[id];
+      if (tok === undefined) continue;
+      if (this.specials.includes(tok)) {
+        byteStr += tok;
+        continue;
+      }
+      for (const ch of tok) {
+        const b = this.charToByte.get(ch);
+        if (b !== undefined) byteStr += String.fromCharCode(b);
+      }
+    }
+    // Reassemble the byte string, then decode as UTF-8 with replacement so a
+    // half-generated multi-byte character never throws mid-stream.
+    const bytes = new Uint8Array(byteStr.length);
+    for (let i = 0; i < byteStr.length; i++) bytes[i] = byteStr.charCodeAt(i) & 0xff;
+    return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+  }
+
+  get size(): number {
+    return this.idToToken.length;
+  }
+
+  idOf(token: string): number | undefined {
+    return this.vocab.get(token);
+  }
+
+  /**
+   * ChatML template (SmolLM2 / Qwen family), matching the model's
+   * `tokenizer_config.json`. `addGenerationPrompt` opens the assistant turn so
+   * the model continues from it.
+   */
+  static chatTemplate(
+    messages: ChatMessage[],
+    addGenerationPrompt = true,
+    systemPrompt?: string,
+  ): string {
+    let out = '';
+    const sys = systemPrompt ?? messages.find((m) => m.role === 'system')?.content;
+    if (sys) out += `<|im_start|>system\n${sys}<|im_end|>\n`;
+    for (const m of messages) {
+      if (m.role === 'system') continue;
+      out += `<|im_start|>${m.role}\n${m.content}<|im_end|>\n`;
+    }
+    if (addGenerationPrompt) out += '<|im_start|>assistant\n';
+    return out;
+  }
 }
 
 /** Fetch and parse the tokenizer for a HF repo id. */
-export async function loadTokenizer(repo: string): Promise<SimpleTokenizer> {
+export async function loadTokenizer(repo: string): Promise<BPETokenizer> {
   const url = `https://huggingface.co/${repo}/resolve/main/tokenizer.json`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`GET ${url} -> HTTP ${res.status}`);
-  return parseTokenizer((await res.json()) as TokenizerJson);
+  return BPETokenizer.fromJSON(await res.json());
 }
