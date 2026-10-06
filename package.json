@@ -29,7 +29,8 @@
     "validate:wgsl": "bash -c 'for f in public/kernels/*.wgsl public/matmul*.wgsl; do ${WGSL_VALIDATE:-/var/tmp/cargo-target-wgsl/release/wgsl-validate} \"$f\"; done'",
     "probe": "node tools/probe-backend.mjs",
     "probe:gpu": "node scripts/probe-gpu-matrix.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "verify:live": "node scripts/verify-live.mjs"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.74",

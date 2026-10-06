@@ -93,6 +93,8 @@ against itself. `npm run verify` runs all of them.
 | 13 | service-worker revisit | second visit with the same profile | model green both times |
 | 14 | first-visit persistence | Cache Storage contents after visit 1 | **269,060,552 B** cached, not 0 |
 | 15 | end-to-end chat (real browser) | local model mirror, 2 turns + reload | correct answers, **coherent turn 2**, 0 re-download |
+| 16 | chat dropdown lists no random-weights fixture | every entry in `MODELS` | only real instruct checkpoints selectable |
+| 17 | live deployment acceptance | fresh profile against the public URL | 269 MB cached on visit 1, **0 bytes** pulled on visit 2, coherent 2-turn chat |
 
 Check 12 exists because the load path was slow enough to be unusable: the bf16
 widener allocated two `ArrayBuffer`s **per element**, which on a 134.5M-element
