@@ -1,0 +1,129 @@
+// Naso quantization kernels for browser LLM inference.
+//
+// Compiled to WGSL compute shaders by the naso-compiler WGSL backend. The
+// constraints below are not documentation guesses -- each was established by
+// compiling a probe kernel and reading the compiler's answer:
+//
+//   * A COMPUTE shader must iterate a `forall` loop over a tensor index; that
+//     iteration domain is the dispatch geometry. A tensor-free function is
+//     REFUSED ("takes no tensor ... use the straight-line WGSL backend").
+//   * `Tensor[f32, N]` -> `array<f32>`, `Tensor[i32, N]` -> `array<i32>`.
+//     WGSL has no i8/i16 storage class, so an `i8` kernel is REFUSED rather
+//     than silently widened. int8 codes are carried in an `i32` tensor and
+//     clamped to [-127, 127] at write time.
+//   * `[1]` (linear) -> `read`; `inout [1]` -> `read_write`.
+//   * Scalar parameters are NOT entry-point arguments here; the compute
+//     backend emits them as `@group(0) @binding(n) var<uniform>` resources.
+//     The host must therefore supply a uniform buffer per scalar, and the ABI
+//     reports them so the host never has to parse shader text.
+//   * Conversion is `expr as T`. There is no `T(expr)` cast form.
+//   * Available float intrinsics include abs, exp, clamp, round, sqrt, floor.
+//     `max` and `select` are NOT builtins; `max(x, 0.0)` is written
+//     `(x + abs(x)) * 0.5`.
+//   * Preconditions go in `requires { assert(..) }`.
+
+// NUMERICS
+// Symmetric int8 quantization:
+//
+//   scale = absmax / 127
+//   q     = clamp(round(x / scale), -127, 127)
+//   x'    = q * scale
+//
+// The round-trip error is bounded by scale/2 per element; the naso repo's
+// kernels/quant_error_bound.naso carries the bound the prover discharges. This
+// file owns the *shader*: that arithmetic, lowered by the verified compiler, so
+// the browser runs exactly the maths the proof is about.
+
+/// Quantize f32 -> i32 codes in the int8 range, symmetric scale.
+///
+/// input  [1]        linear, read once
+/// output inout [1]  written in place
+/// scale f32         quantization step; must be positive
+fn quantize_int8_symmetric(
+    input: [1] Tensor[f32, 1024],
+    output: inout [1] Tensor[i32, 1024],
+    scale: f32
+) requires {
+    assert(scale > 0.0);
+} {
+    forall i in 0..1024 {
+        let v = input[i] / scale;
+        output[i] = clamp(round(v), -127.0, 127.0) as i32;
+    }
+}
+
+/// Dequantize i32 codes -> f32, symmetric scale.
+///
+/// input  [1]        linear, read once
+/// output inout [1]  written in place
+/// scale f32         quantization step; must be positive
+fn dequantize_int8_symmetric(
+    input: [1] Tensor[i32, 1024],
+    output: inout [1] Tensor[f32, 1024],
+    scale: f32
+) requires {
+    assert(scale > 0.0);
+} {
+    forall i in 0..1024 {
+        let v = input[i] as f32;
+        output[i] = v * scale;
+    }
+}
+
+/// Elementwise scale + clamp (f32) — the reference end-to-end kernel.
+///
+/// Two storage bindings, scalar uniforms, one `forall` covering the extent.
+/// Exercises every part of the host<->shader contract the demo uses.
+///
+/// input  [1]        linear, read once
+/// output inout [1]  written in place
+fn scale_clamp_f32(
+    input: [1] Tensor[f32, 1024],
+    output: inout [1] Tensor[f32, 1024],
+    scale: f32,
+    lo: f32,
+    hi: f32
+) requires {
+    assert(scale > 0.0);
+    assert(lo < hi);
+} {
+    forall i in 0..1024 {
+        let v = input[i] * scale;
+        output[i] = clamp(v, lo, hi);
+    }
+}
+
+/// SiLU / Swish activation: x / (1 + exp(-x)).
+///
+/// input  [1]        linear, read once
+/// output inout [1]  written in place
+fn silu_f32(
+    input: [1] Tensor[f32, 1024],
+    output: inout [1] Tensor[f32, 1024]
+) {
+    forall i in 0..1024 {
+        let x = input[i];
+        output[i] = x / (1.0 + exp(-x));
+    }
+}
+
+/// Fused scale + ReLU: out[i] = max(in[i] * scale, 0).
+///
+/// `max` is not a Naso builtin; the identity `max(v,0) = (v + |v|) / 2` is
+/// exact for reals and for IEEE-754 (the addition is exact in magnitude).
+///
+/// input  [1]        linear, read once
+/// output inout [1]  written in place
+/// scale f32         must be positive
+fn relu_scale_f32(
+    input: [1] Tensor[f32, 1024],
+    output: inout [1] Tensor[f32, 1024],
+    scale: f32
+) requires {
+    assert(scale > 0.0);
+} {
+    forall i in 0..1024 {
+        let v = input[i] * scale;
+        output[i] = (v + abs(v)) * 0.5;
+    }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "naso-llm",
+  "version": "0.1.0",
+  "description": "Browser LLM inference with quantization kernels compiled by Naso's formally verified compiler",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/naso-lang/naso-llm.git"
+  },
+  "scripts": {
+    "dev": "vite --port 3000 --strictPort",
+    "build": "tsc -p tsconfig.json --noEmit && node scripts/build.mjs",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "compile:kernels": "node scripts/compile-kernels.js",
+    "verify": "node scripts/verify.mjs",
+    "verify:forward": "node -e \"import('./scripts/verify.mjs')\"",
+    "verify:bridge": "node tools/verify_bridge.mjs",
+    "validate:wgsl": "bash -c 'for f in public/kernels/*.wgsl; do ${WGSL_VALIDATE:-/var/tmp/cargo-target-wgsl/release/wgsl-validate} \"$f\"; done'",
+    "probe": "node tools/probe-backend.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "@webgpu/types": "^0.1.74",
+    "puppeteer-core": "^25.12.0",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21"
+  },
+  "dependencies": {
+    "nasoc-wasm": "file:./public/pkg"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

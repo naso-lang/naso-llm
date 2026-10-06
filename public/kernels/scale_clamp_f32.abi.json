@@ -1,0 +1,44 @@
+{
+  "entryPoint": "scale_clamp_f32_compute",
+  "workgroupSize": 64,
+  "dispatchGroups": 16,
+  "bindings": [
+    {
+      "name": "input",
+      "elem": "array<f32>",
+      "access": "read",
+      "index": 0,
+      "bytes": 4096
+    },
+    {
+      "name": "output",
+      "elem": "array<f32>",
+      "access": "read_write",
+      "index": 1,
+      "bytes": 4096
+    }
+  ],
+  "scalars": [
+    {
+      "name": "scale",
+      "type": "f32",
+      "index": 2,
+      "wgslName": "scale_u",
+      "bytes": 16
+    },
+    {
+      "name": "lo",
+      "type": "f32",
+      "index": 3,
+      "wgslName": "lo_u",
+      "bytes": 16
+    },
+    {
+      "name": "hi",
+      "type": "f32",
+      "index": 4,
+      "wgslName": "hi_u",
+      "bytes": 16
+    }
+  ]
+}

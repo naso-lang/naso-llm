@@ -1,0 +1,30 @@
+{
+  "entryPoint": "relu_scale_f32_compute",
+  "workgroupSize": 64,
+  "dispatchGroups": 16,
+  "bindings": [
+    {
+      "name": "input",
+      "elem": "array<f32>",
+      "access": "read",
+      "index": 0,
+      "bytes": 4096
+    },
+    {
+      "name": "output",
+      "elem": "array<f32>",
+      "access": "read_write",
+      "index": 1,
+      "bytes": 4096
+    }
+  ],
+  "scalars": [
+    {
+      "name": "scale",
+      "type": "f32",
+      "index": 2,
+      "wgslName": "scale_u",
+      "bytes": 16
+    }
+  ]
+}

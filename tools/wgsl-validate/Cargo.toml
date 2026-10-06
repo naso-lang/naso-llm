@@ -1,0 +1,17 @@
+[package]
+name = "wgsl-validate"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "wgsl-validate"
+path = "src/main.rs"
+
+[dependencies]
+# The same front-end wgpu/the browser uses. `wgsl-in` is the feature
+# crates/naso-verify enables, so the dependency is already built and reused.
+naga = { version = "25", features = ["wgsl-in"] }
+
+[profile.release]
+opt-level = 1

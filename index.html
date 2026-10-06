@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0d1117">
+<meta name="description" content="Browser LLM inference with quantization kernels compiled from Naso's formally verified compiler.">
+<title>Naso LLM · verified quantization in the browser</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3;
+    --muted: #8b949e; --accent: #58a6ff; --good: #3fb950; --bad: #f85149; --warn: #d29922;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh;
+  }
+  header { padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: .75rem; }
+  header img { width: 28px; height: 28px; }
+  header h1 { font-size: 1rem; font-weight: 600; }
+  header p { font-size: .75rem; color: var(--muted); margin-left: auto; }
+  main { max-width: 960px; margin: 0 auto; padding: 1.5rem; display: flex; flex-direction: column; gap: 1.25rem; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
+  .card h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); margin-bottom: .9rem; }
+  .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .row > * { flex: 1 1 220px; }
+  .status { display: flex; align-items: center; gap: .5rem; font-size: .8rem; padding: .5rem .75rem; border: 1px solid var(--border); border-radius: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--good); } .dot.err { background: var(--bad); } .dot.busy { background: var(--warn); }
+  button {
+    font: inherit; background: var(--accent); color: #04121f; border: none; border-radius: 6px;
+    padding: .55rem 1rem; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input, select {
+    font: inherit; background: #0d1117; color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: .5rem .75rem; width: 100%;
+  }
+  pre { background: #0d1117; border: 1px solid var(--border); border-radius: 6px; padding: .75rem; overflow: auto; font-size: .72rem; max-height: 320px; white-space: pre; }
+  table { width: 100%; border-collapse: collapse; font-size: .75rem; }
+  th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .ok { color: var(--good); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  .log { font-size: .72rem; max-height: 220px; overflow: auto; }
+  .log div { padding: .15rem 0; border-bottom: 1px solid #21262d; }
+  .log .lv-error { color: var(--bad); } .log .lv-warn { color: var(--warn); } .log .lv-success { color: var(--good); }
+  .muted { color: var(--muted); font-size: .72rem; }
+  details { margin-top: .5rem; } summary { cursor: pointer; font-size: .78rem; color: var(--accent); }
+  #progress { height: 4px; background: #0d1117; border-radius: 2px; overflow: hidden; margin-top: .5rem; }
+  #progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .out { font-size: 1rem; padding: .6rem .75rem; background: #0d1117; border: 1px solid var(--border); border-radius: 6px; min-height: 2.4rem; word-break: break-all; }
+</style>
+</head>
+<body>
+<header>
+  <img src="/favicon.svg" alt="">
+  <h1>Naso LLM</h1>
+  <p>browser inference · kernels compiled by Naso's verified compiler</p>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Environment</h2>
+    <div class="row">
+      <div class="status"><span class="dot" id="dot-webgpu"></span><span>WebGPU</span></div>
+      <div class="status"><span class="dot" id="dot-naso"></span><span>Naso compiler (WASM)</span></div>
+      <div class="status"><span class="dot" id="dot-model"></span><span id="model-state">Model not loaded</span></div>
+    </div>
+    <div id="progress"><div></div></div>
+    <p class="muted" id="hint" style="margin-top:.6rem"></p>
+  </section>
+
+  <section class="card">
+    <h2>Kernels compiled at runtime from <code>kernels/*.naso</code></h2>
+    <p class="muted">Each shader below was produced in this browser by the Naso WASM compiler, not committed as WGSL. The binding table is the ABI emitted beside it.</p>
+    <div id="kernels"></div>
+  </section>
+
+  <section class="card">
+    <h2>Forward pass</h2>
+    <div class="row">
+      <div style="flex:2 1 380px"><input id="prompt" value="The capital of France is" aria-label="Prompt"></div>
+      <div style="flex:0 0 160px"><button id="run" disabled>Run forward pass</button></div>
+    </div>
+    <p class="muted" style="margin-top:.6rem" id="run-hint">Loads a real checkpoint from Hugging Face, quantizes every projection matrix through the GPU kernels above, then runs one exact f32 forward pass.</p>
+  </section>
+
+  <section class="card" id="results-card" style="display:none">
+    <h2>Quantization check</h2>
+    <p class="muted">Per-element round-trip error vs. the promise <code>|x − dequant(quant(x))| ≤ scale/2</code>. Measured on the GPU, not asserted.</p>
+    <div id="reports"></div>
+  </section>
+
+  <section class="card" id="output-card" style="display:none">
+    <h2>Next-token distribution</h2>
+    <div id="output"></div>
+  </section>
+
+  <section class="card">
+    <h2>Log</h2>
+    <div class="log" id="log"></div>
+  </section>
+</main>
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
