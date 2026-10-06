@@ -19,7 +19,7 @@
  *   * same-origin static: cache-first.
  */
 
-const VERSION = 'v4';
+const VERSION = 'v5';
 const CORE = `naso-llm-core-${VERSION}`;
 const MODEL = 'naso-llm-models-v1';
 const RUNTIME = `naso-llm-runtime-${VERSION}`;
