@@ -257,32 +257,42 @@ Both findings are reproduced by `npm run probe` (`tools/probe-backend.mjs`).
   structured data. Persisting the decoded form (e.g. to OPFS) would remove those
   seconds, and is the obvious next step if the warm load matters more than the
   code it would add.
-* **A pre-quantised checkpoint is now built and verified, and it cuts the download
-  1.65x — not 10x.** `npm run quantize:build` writes `model.int8.npq`: the 210
-  projection matrices as int8 (packed + per-row scales), everything else kept in
-  its original bf16 (bit-exact). Measured: **163.5 MB against 269.1 MB**, so a
-  slow (10 Mbit/s) first visit goes 215 s → 131 s, and a fast one 21.5 s → 13.1 s.
-  `npm run verify:quantized` proves the artifact is what the app would compute:
-  all 210 packed word arrays and scale arrays are **bit-identical to
-  `quantizeRows()`** from `src/quantize.ts`, the `|W−W′| ≤ scale/2` bound holds
-  with 0 violating rows, and a real prompt run on the artifact reproduces the f32
-  model's argmax (504) and its full generated text.
-  The embedding is why it is 1.65x and not 4x: it is 56.6 MB on disk (bf16) and
-  is not a projection; quantising it too reaches 135.4 MB (1.99x) at the cost of
-  degrading the tied output head.
-  Two measurement traps had to be cleared to make this exact, and both are
-  recorded because they are easy to re-introduce: the rounding must be **half-up**
-  (`Math.round`), not numpy's default half-to-even — 88,677 elements of
-  106,168,320 sit on a `.5` tie and quantise differently; and the per-row division
-  must be done in **float64**, because `quantize.ts` divides f32 values as JS
-  doubles; float32 arithmetic rounds the quotient first and flips a further
-  **57,083** elements of the same 106,168,320.
-  Two costs remain, and they stand as before: the artifact freezes the error in
-  (today's int8 path is an *in-browser* measurement against the f32 model), and it
-  breaks the "download the published checkpoint, verify it here" story. Serving it
-  from a public object store also needs a public bucket URL, which is a
-  dashboard-level setting rather than something the S3 credentials can enable.
-  The honest framing is unchanged: it buys a smaller first visit, not a different
+* **A pre-quantised checkpoint is now built, verified, AND WIRING-UP IN THE APP.**
+  `npm run quantize:build` writes `model.int8.npq` (163.5 MB vs 269.1 MB, 1.65x). The
+  loader lives in `src/model.ts:parseNPQ` and is exercised by the app on startup: on
+  a first visit it HEAD-probes `/model/smollm2-135m-int8.npq`, and when a local artifact
+  is present it downloads **that** (163 MB) instead of the 269 MB safetensors, then
+  dequantises the int8 matrices on the fly into the same dense `f32` tensors the rest of
+  the generator consumes -- no quantisation or KV-cache changes elsewhere. On a revisit
+  the cache store is read first, so the checkpoint is not re-downloaded.
+  The 210 projection matrices are int8 (packed + per-row scales); everything else is kept
+  in its original bf16 (bit-exact). Measured: **163.5 MB against 269.1 MB**, so a
+  slow (10 Mbit/s) first visit goes 215 s -> 131 s, and a fast one 21.5 s -> 13.1 s.
+  `npm run verify:loader` proves it with the app's own `parseNPQ` + forward pass: 272/272
+  tensors parse as `f32`, the top-1 token matches the f32 model (504) and the generated
+  text is identical (`The capital of France is Paris.`). `npm run verify:quantized` proves
+  the artifact's bytes are what the app would compute: all 210 packed/scale arrays are
+  **bit-identical to `quantizeRows()`** from `src/quantize.ts`, and the |W-w'| <= scale/2
+  bound holds with 0 violating rows.
+  Two measurement traps had to be cleared to make this exact (and both are easy to
+  re-introduce): rounding must be **half-up** (`Math.round`), not numpy's default
+  half-to-even -- 88,677 of 106,168,320 elements sit on a `.5` tie and quantise
+  differently; and the per-row division must be done in **float64**, because
+  `quantize.ts` divides f32 values as JS doubles -- float32 arithmetic rounds the
+  quotient first and flips a further **57,083** elements of the same 106,168,320.
+  The embedding is why it is 1.65x and not 4x: it is 56.6 MB on disk (bf16) and is
+  not a projection; quantising it too reaches 135.4 MB (1.99x) at the cost of degrading
+  the tied output head.
+  Serving it is a **local** choice: `vite.config.mts` serves it from `/model/*` during
+  `npm run dev` / `npm run preview`; it is never committed (gitignored, ~163 MB) and is
+  **not** packaged into the GitHub Pages deploy (`GH_PAGES=1` builds omit it), so the live
+  site still fetches the published f32 checkpoint exactly as before. Cloudflare/R2 is
+  dev-only here.
+  Two costs remain, and they stand as before: the artifact freezes in today's int8 error
+  (the path is an *in-browser* measurement against the f32 model), and it breaks the
+  "download the published checkpoint, verify it here" story -- serving a pre-quantised
+  model from a different source is a deployment choice the S3 credentials alone cannot
+  flip. The honest framing is unchanged: it buys a smaller first visit, not a different
   class of product.
 * **Hugging Face rate-limits the endpoint that serves the checkpoint** (3000
   requests / 300 s per client). Repeated cold loads from one IP can trip it, and

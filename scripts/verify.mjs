@@ -110,14 +110,20 @@ step('backend-findings', () => ({ ok: run('node', [join(root, 'tools', 'probe-ba
 // Nothing in the chat dropdown may be a random/untrained test fixture.
 step('chat-models', () => ({ ok: run('node', [join(root, 'scripts', 'verify-models.mjs')]), note: 'only real instruct models selectable' }));
 
-// 7b. pre-quantised checkpoint: NPQ1 == what quantize.ts computes, forward-equal
+// 7b. local loader: the APP'S parseNPQ (src/model.ts) reproduces the f32 model.
+//      Proves the in-browser loader this feature ships: parses the artifact
+//      into dense F32 tensors and a real forward pass matches top-1 + text.
+// 7c. pre-quantised checkpoint: NPQ1 == what quantize.ts computes, forward-equal
 {
   const npq = process.env.NASO_NPQ ?? '/var/tmp/model.int8.npq';
   if (existsSync(npq)) {
+    step('loader', () => ({ ok: run('node', [join(root, 'scripts', 'verify-loader.mjs'), MODEL_DIR, npq]),
+      note: 'app parseNPQ reproduces f32 top-1 + text exactly' }));
     step('quantized-artifact', () => ({ ok: run('node', [join(root, 'tools', 'verify_quantized.mjs'), MODEL_DIR, npq]),
       note: 'bit-identical to quantize.ts, forward-equal' }));
   } else {
-    console.log(`\n=== quantized-artifact ===\nskipped: no ${npq}. Build with: npm run quantize:build`);
+    console.log('\n=== loader / quantized-artifact ===\nskipped: no ' + npq + '. Build with: npm run quantize:build');
+    results.push({ name: 'loader', ok: true, skipped: true });
     results.push({ name: 'quantized-artifact', ok: true, skipped: true });
   }
 }

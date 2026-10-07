@@ -99,20 +99,24 @@ const r2 = await ask(page, 'And what is its population?');
 const a2 = r2[r2.length - 1] ?? '';
 check('turn 2 stays coherent', !/\n\s*(user|assistant)\s*\n/.test(a2), JSON.stringify(a2));
 
-// Cache must hold the checkpoint after visit 1.
+// Cache must hold the checkpoint after visit 1. The checkpoint is the 269 MB
+// safetensors OR -- when a local pre-quantised artifact is served (see
+// vite.config.mts) -- the 163 MB NPQ1 file fetched from /model/. Both lives in
+// Cache Storage via the page-side tee.
 await new Promise((r) => setTimeout(r, 2500));
 const cached = await page.evaluate(async () => {
   for (const n of await caches.keys()) {
     const c = await caches.open(n);
     for (const k of await c.keys()) {
-      if (!k.url.includes('safetensors')) continue;
+      const url = k.url.split('/').slice(-1)[0];
+      if (!url.includes('safetensors') && !url.includes('int8.npq')) continue;
       const res = await c.match(k);
-      return { cache: n, bytes: (await res.arrayBuffer()).byteLength };
+      return { cache: n, file: url, bytes: (await res.arrayBuffer()).byteLength };
     }
   }
   return null;
 }, { timeout: 20_000 });
-check('checkpoint persisted on visit 1', !!cached && cached.bytes > 200_000_000, JSON.stringify(cached));
+check('checkpoint persisted on visit 1', !!cached && cached.bytes > 100_000_000, JSON.stringify(cached));
 
 // Visit 2: reload; the checkpoint must come from cache. Assert by counting
 // network requests to the model base during the reload.

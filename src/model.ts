@@ -79,6 +79,95 @@ function decode(dtype: string, bytes: Uint8Array, elements: number): Float32Arra
 }
 
 /**
+ * Parse an NPQ1 pre-quantised checkpoint (see tools/build_quantized.py).
+ *
+ * This is the format that lets a first visit download 163.5 MB instead of 269 MB.
+ * It is deliberately NOT a new tensor type: int8 tensors are DEQUANTISED here
+ * into the same f32 `Tensor` every other loader path produces, so the generator,
+ * the quantisation check and the KV cache need no changes at all.
+ *
+ * The container carries the real `shape` of each tensor (not a flattened
+ * [n, k]), because the loader has to rebuild `{dtype, shape, data}` and
+ * `getTensor()` looks tensors up by name and shape.
+ *
+ *   magic "NPQ1" | u32 version | u32 count | per tensor:
+ *     u32 nameLen | name | u8 dtype | u32 rank | rank*u32 dims | data
+ *   dtype 0 = f32, 1 = int8 (u32-packed + per-row f32 scales), 2 = bf16
+ */
+export function parseNPQ(
+  buffer: ArrayBuffer,
+  onProgress?: (done: number, total: number) => void,
+): Map<string, Tensor> {
+  const dv = new DataView(buffer);
+  const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+  if (magic !== 'NPQ1') throw new Error(`not an NPQ1 file (magic ${JSON.stringify(magic)})`);
+  const version = dv.getUint32(4, true);
+  if (version !== 1) throw new Error(`unsupported NPQ version ${version}`);
+  const count = dv.getUint32(8, true);
+
+  let off = 12;
+  const tensors = new Map<string, Tensor>();
+  for (let t = 0; t < count; t++) {
+    const nameLen = dv.getUint32(off, true); off += 4;
+    const name = new TextDecoder().decode(new Uint8Array(buffer, off, nameLen)); off += nameLen;
+    const dtype = dv.getUint8(off); off += 1;
+    const rank = dv.getUint32(off, true); off += 4;
+    const shape: number[] = [];
+    for (let d = 0; d < rank; d++) { shape.push(dv.getUint32(off, true)); off += 4; }
+    const elements = shape.reduce((a, b) => a * b, 1);
+
+    // Each tensor's bytes are wrapped in a fresh, 4-aligned view by slicing the
+    // underlying byte range first. The artifact is packed sequentially with NO
+    // padding between tensors (see tools/build_quantized.py); a pass-through
+    // tensor of odd length leaves the running offset non-aligned, so a typed
+    // array *view* of `buffer` at that offset throws "start offset ... should be
+    // a multiple of 4". Taking a Uint8 slice (which copies onto a fresh, aligned
+    // buffer) then viewing that slice is always valid. The int8 path dequantises
+    // into a new f32 buffer immediately, so there is no extra resident memory.
+    if (dtype === 1) {
+      // int8: dequantise straight into f32. `buffer.slice` COPIES onto a fresh,
+      // 4-aligned ArrayBuffer; the Uint32/Float32 views below then have a valid
+      // byte offset even when the running offset was unaligned (a pass-through
+      // tensor of odd length -- e.g. a 1-D bias -- can do that).
+      const [n, k] = shape;
+      const kwords = k / 4;
+      const out = new Float32Array(elements);
+      const packed = new Uint32Array(buffer.slice(off, off + n * kwords * 4)); off += n * kwords * 4;
+      const scales = new Float32Array(buffer.slice(off, off + n * 4)); off += n * 4;
+      for (let o = 0; o < n; o++) {
+        const scale = scales[o];
+        const row = o * k;
+        for (let w = 0; w < kwords; w++) {
+          const word = packed[o * kwords + w];
+          for (let i = 0; i < 4; i++) {
+            const b = (word >>> (i * 8)) & 0xff;
+            out[row + w * 4 + i] = (b < 128 ? b : b - 256) * scale;
+          }
+        }
+      }
+      tensors.set(name, { dtype: 'F32', shape, data: out });
+    } else if (dtype === 2) {
+      // bf16 pass-through: copy + promote to f32 for the generator (the app
+      // never keeps a bf16 tensor type; decode() would, but the loader folds the
+      // shift here so downstream code sees only F32).
+      const src = new Uint16Array(buffer.slice(off, off + elements * 2)); off += elements * 2;
+      const out = new Float32Array(elements);
+      const dst = new Uint32Array(out.buffer);
+      for (let i = 0; i < elements; i++) dst[i] = src[i] << 16;
+      tensors.set(name, { dtype: 'F32', shape, data: out });
+    } else if (dtype === 0) {
+      const out = new Float32Array(buffer.slice(off, off + elements * 4) as ArrayBuffer); off += elements * 4;
+      tensors.set(name, { dtype: 'F32', shape, data: out });
+    } else {
+      throw new Error(`${name}: unsupported NPQ dtype ${dtype}`);
+    }
+    onProgress?.(t + 1, count);
+  }
+  logger.info('main', `parsed ${tensors.size} tensors from NPQ1`);
+  return tensors;
+}
+
+/**
  * Fetch with bounded retries and backoff.
  *
  * Hugging Face rate-limits its resolve endpoint per window and returns 429 when
@@ -144,6 +233,24 @@ export async function fetchWithProgress(
    */
   cacheName?: string,
 ): Promise<ArrayBuffer> {
+  // Cache-first on a revisit. The service worker intercepts *Hugging Face* URLs
+  // (see public/sw.js), but a same-origin local artifact (e.g. /model/...npq) is
+  // not routed through it, so without this check every revisit would re-HEAD +
+  // re-GET the checkpoint. `forCache` below still tees the *network* response;
+  // this read only short-circuits the network round-trip and is a no-op for the
+  // HF path (the worker already serves those from cache before this runs).
+  if (cacheName && 'caches' in window) {
+    try {
+      const hit = await (await caches.open(cacheName)).match(url);
+      if (hit) {
+        logger.info('main', `cache hit ${url.split('/').pop()}`);
+        return hit.arrayBuffer();
+      }
+    } catch (e) {
+      logger.debug('main', `cache match failed for ${url}: ${e}`);
+    }
+  }
+
   const res = await fetchWithRetry(url);
   if (!res.ok) throw new Error(`GET ${url} -> HTTP ${res.status}`);
 

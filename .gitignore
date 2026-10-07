@@ -18,5 +18,11 @@ node_modules/
 # model files are fetched at runtime and cached by the service worker
 *.safetensors
 *.npy
+# pre-quantised checkpoint artefact: built locally (npm run quantize:build),
+# ~163 MB, intentionally NOT committed. The app fetches it from /model/* at
+# runtime when present, and falls back to the f32 safetensors otherwise.
+*.npq
+model.int8.npq
+public/model/
 # ... except the small committed reference data the checks compare against.
 !tools/reference/*.npy

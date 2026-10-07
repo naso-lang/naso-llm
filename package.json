@@ -32,7 +32,8 @@
     "smoke": "node scripts/smoke.mjs",
     "verify:live": "node scripts/verify-live.mjs",
     "quantize:build": "/var/tmp/tokvenv/bin/python tools/build_quantized.py /var/tmp/smol /var/tmp/model.int8.npq",
-    "verify:quantized": "node tools/verify_quantized.mjs /var/tmp/smol /var/tmp/model.int8.npq"
+    "verify:quantized": "node tools/verify_quantized.mjs /var/tmp/smol /var/tmp/model.int8.npq",
+    "verify:loader": "node scripts/verify-loader.mjs /var/tmp/smol /var/tmp/model.int8.npq"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.74",

@@ -94,6 +94,13 @@ export interface ModelConfig {
   ropeTheta: number;
   /** Bytes of model.safetensors, for a progress bar. */
   weightsBytes: number;
+  /**
+   * The local pre-quantised checkpoint (NPQ1) for this model, under /model/.
+   * When present the app prefers it: the download is 1.65x smaller, and the
+   * per-row scales are already applied rather than recomputed in the page. The
+   * f32 safetensors path stays as the fallback, so absence is not a failure.
+   */
+  quantizedLocal?: string;
 }
 
 export const MODELS: ModelConfig[] = [
@@ -117,6 +124,7 @@ export const MODELS: ModelConfig[] = [
     rmsNormEps: 1e-5,
     ropeTheta: 100000.0,
     weightsBytes: 269060552,
+    quantizedLocal: '/model/smollm2-135m-int8.npq',
   },
 ];
 

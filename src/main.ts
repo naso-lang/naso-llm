@@ -11,7 +11,7 @@ import { logger } from './logger.js';
 import { initNaso, compileKernel } from './naso.js';
 import { KERNEL_SPECS, loadKernelSource } from './kernels.js';
 import { webgpuEngine } from './webgpu.js';
-import { parseSafetensors, fetchWithProgress, fetchWithRetry, type Tensor } from './model.js';
+import { parseSafetensors, parseNPQ, fetchWithProgress, fetchWithRetry, type Tensor } from './model.js';
 import { BPETokenizer, type ChatMessage } from './tokenizer.js';
 import { createKVCache, prefill, decodeFrom, type KVCache } from './generate.js';
 import { quantizeRows, quantError, packedBytes, type QuantizedMatrix } from './quantize.js';
@@ -62,8 +62,33 @@ function setDot(id: string, state: 'idle' | 'ok' | 'err' | 'busy') {
 // ---------------------------------------------------------------------------
 // model loading
 // ---------------------------------------------------------------------------
-// `fetchWithProgress` and the safetensors reader live in model.ts, where the
-// decode path is unit-tested; main.ts only wires them to the UI.
+// `fetchWithProgress`, the safetensors reader and the NPQ1 reader live in
+// model.ts, where the decode paths are unit-tested; main.ts only wires them in.
+
+/**
+ * Look for the local pre-quantised checkpoint (NPQ1) served from the app's own
+ * origin (see the naso-local-model plugin in vite.config.ts).
+ *
+ * A HEAD request decides, so an absent artifact costs one cheap round-trip and
+ * simply falls through to the published safetensors path. The URL is
+ * base-relative so it resolves under both '/' and the GitHub Pages subpath, and
+ * no-cors/opaque failures are treated as "absent" rather than as load errors.
+ */
+async function probeLocalArtifact(path: string): Promise<{ url: string; bytes: number } | null> {
+  const url = new URL(path.replace(/^\//, ''), document.baseURI).href;
+  try {
+    const res = await fetch(url, { method: 'HEAD' });
+    if (!res.ok) return null;
+    const bytes = Number(res.headers.get('Content-Length') ?? 0);
+    // A wrongly-served index.html would also be 200; an HTML payload is not a
+    // checkpoint. Anything implausibly small is not one either.
+    const type = res.headers.get('Content-Type') ?? '';
+    if (type.includes('text/html') || bytes < 1e6) return null;
+    return { url, bytes };
+  } catch {
+    return null;
+  }
+}
 
 async function loadModel() {
   const btn = $<HTMLButtonElement>('load');
@@ -92,26 +117,51 @@ async function loadModel() {
     };
     logger.info('main', `${config.name}: hidden=${config.hiddenSize} layers=${config.numLayers} heads=${config.numHeads}/${config.numKvHeads} vocab=${config.vocabSize}`);
 
-    const weightsUrl = `${HF_BASE}/${config.repo}/resolve/main/model.safetensors`;
-    logger.info('main', `fetching ${weightsUrl}`);
-    phase('downloading…');
-    let buf: ArrayBuffer | null = await fetchWithProgress(weightsUrl, (loaded_, total) => {
-      bar.style.width = `${total ? ((loaded_ / total) * 100).toFixed(1) : 0}%`;
-      phase(`downloading ${(loaded_ / 1e6).toFixed(0)}/${(total / 1e6).toFixed(0)} MB`);
-    }, MODEL_CACHE);
-    logger.info('main', `downloaded ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+    // Prefer the local pre-quantised checkpoint when it is available. It is 1.65x
+    // smaller than the bf16 safetensors and its per-row scales are already
+    // applied. It is served from a local mount only (see vite.config.ts), so a
+    // HEAD probe decides: 200 -> use it, anything else -> the published f32 path.
+    // The quantisation check below still runs either way, so the panel keeps
+    // measuring rather than reporting a stored number.
+    let buf: ArrayBuffer | null = null;
+    const npq = config.quantizedLocal ? await probeLocalArtifact(config.quantizedLocal) : null;
+    if (npq) {
+      logger.info('main', `local pre-quantised checkpoint available: ${npq.url} (${(npq.bytes / 1e6).toFixed(1)} MB)`);
+      phase('downloading int8 checkpoint…');
+      buf = await fetchWithProgress(npq.url, (loaded_, total) => {
+        bar.style.width = `${total ? ((loaded_ / total) * 100).toFixed(1) : 0}%`;
+        phase(`downloading int8 ${(loaded_ / 1e6).toFixed(0)}/${(total / 1e6).toFixed(0)} MB`);
+      }, MODEL_CACHE);
+      logger.info('main', `downloaded int8 checkpoint in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 
-    phase('decoding…');
-    const tDecode = performance.now();
-    tensors = Object.fromEntries(parseSafetensors(buf, (done, total) => {
-      bar.style.width = `${((done / total) * 100).toFixed(1)}%`;
-      // Only touch the DOM a few times; a text write per tensor is noise.
-      if (done % 24 === 0 || done === total) phase(`decoding ${done}/${total} tensors`);
-    }));
-    logger.info('main', `decoded ${Object.keys(tensors).length} tensors in ${((performance.now() - tDecode) / 1000).toFixed(1)}s`);
+      phase('expanding int8…');
+      tensors = Object.fromEntries(parseNPQ(buf, (done, total) => {
+        bar.style.width = `${((done / total) * 100).toFixed(1)}%`;
+        if (done % 24 === 0 || done === total) phase(`expanding ${done}/${total} tensors`);
+      }));
+      logger.success('main', `int8 checkpoint ready: ${Object.keys(tensors).length} tensors`);
+    } else {
+      const weightsUrl = `${HF_BASE}/${config.repo}/resolve/main/model.safetensors`;
+      logger.info('main', `fetching ${weightsUrl}`);
+      phase('downloading…');
+      buf = await fetchWithProgress(weightsUrl, (loaded_, total) => {
+        bar.style.width = `${total ? ((loaded_ / total) * 100).toFixed(1) : 0}%`;
+        phase(`downloading ${(loaded_ / 1e6).toFixed(0)}/${(total / 1e6).toFixed(0)} MB`);
+      }, MODEL_CACHE);
+      logger.info('main', `downloaded ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+
+      phase('decoding…');
+      const tDecode = performance.now();
+      tensors = Object.fromEntries(parseSafetensors(buf, (done, total) => {
+        bar.style.width = `${((done / total) * 100).toFixed(1)}%`;
+        // Only touch the DOM a few times; a text write per tensor is noise.
+        if (done % 24 === 0 || done === total) phase(`decoding ${done}/${total} tensors`);
+      }));
+      logger.info('main', `decoded ${Object.keys(tensors).length} tensors in ${((performance.now() - tDecode) / 1000).toFixed(1)}s`);
+    }
     // The raw checkpoint is dead weight once the tensors are decoded (each byte
     // of bf16 became four, so the decoded form is what matters). Dropping the
-    // reference now lets the GC reclaim 269 MB before the quantisation pass.
+    // reference now lets the GC reclaim the download before the quantisation pass.
     buf = null;
     logger.success('main', `parsed ${Object.keys(tensors).length} tensors`);
 
