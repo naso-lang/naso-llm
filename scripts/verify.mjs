@@ -110,6 +110,18 @@ step('backend-findings', () => ({ ok: run('node', [join(root, 'tools', 'probe-ba
 // Nothing in the chat dropdown may be a random/untrained test fixture.
 step('chat-models', () => ({ ok: run('node', [join(root, 'scripts', 'verify-models.mjs')]), note: 'only real instruct models selectable' }));
 
+// 7b. pre-quantised checkpoint: NPQ1 == what quantize.ts computes, forward-equal
+{
+  const npq = process.env.NASO_NPQ ?? '/var/tmp/model.int8.npq';
+  if (existsSync(npq)) {
+    step('quantized-artifact', () => ({ ok: run('node', [join(root, 'tools', 'verify_quantized.mjs'), MODEL_DIR, npq]),
+      note: 'bit-identical to quantize.ts, forward-equal' }));
+  } else {
+    console.log(`\n=== quantized-artifact ===\nskipped: no ${npq}. Build with: npm run quantize:build`);
+    results.push({ name: 'quantized-artifact', ok: true, skipped: true });
+  }
+}
+
 // 8. safetensors decode equivalence (bf16/f16 bit-identical over the full domain)
 step('decode', () => ({ ok: run('node', [join(root, 'scripts', 'verify-decode.mjs')]), note: 'bit-identical over 2^16' }));
 

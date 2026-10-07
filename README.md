@@ -257,17 +257,33 @@ Both findings are reproduced by `npm run probe` (`tools/probe-backend.mjs`).
   structured data. Persisting the decoded form (e.g. to OPFS) would remove those
   seconds, and is the obvious next step if the warm load matters more than the
   code it would add.
-* **Pre-quantising the checkpoint would cut the download by 2x, not 10x** —
-  measured with `tools/quant_cost.py`. The 210 projection matrices shrink 3.98x
-  (424.7 MB → 106.8 MB int8), but the token embedding is 113.2 MB of the total
-  and is not a projection; even quantising it as well leaves 135.3 MB against
-  269.1 MB today. So the download goes 215 s → 176 s on a slow (10 Mbit/s) link,
-  or 21.5 s → 17.6 s on a fast one. Two costs come with it: pre-quantising
-  freezes the error into the artifact (today's int8 path is an *in-browser
-  measurement* against the f32 model, with a live cosine check), and it breaks
-  the "download the published checkpoint, verify it here" story. The honest
-  framing is that it buys a 2x smaller first visit and a slightly faster warm
-  start, not a different class of product.
+* **A pre-quantised checkpoint is now built and verified, and it cuts the download
+  1.65x — not 10x.** `npm run quantize:build` writes `model.int8.npq`: the 210
+  projection matrices as int8 (packed + per-row scales), everything else kept in
+  its original bf16 (bit-exact). Measured: **163.5 MB against 269.1 MB**, so a
+  slow (10 Mbit/s) first visit goes 215 s → 131 s, and a fast one 21.5 s → 13.1 s.
+  `npm run verify:quantized` proves the artifact is what the app would compute:
+  all 210 packed word arrays and scale arrays are **bit-identical to
+  `quantizeRows()`** from `src/quantize.ts`, the `|W−W′| ≤ scale/2` bound holds
+  with 0 violating rows, and a real prompt run on the artifact reproduces the f32
+  model's argmax (504) and its full generated text.
+  The embedding is why it is 1.65x and not 4x: it is 56.6 MB on disk (bf16) and
+  is not a projection; quantising it too reaches 135.4 MB (1.99x) at the cost of
+  degrading the tied output head.
+  Two measurement traps had to be cleared to make this exact, and both are
+  recorded because they are easy to re-introduce: the rounding must be **half-up**
+  (`Math.round`), not numpy's default half-to-even — 88,677 elements of
+  106,168,320 sit on a `.5` tie and quantise differently; and the per-row division
+  must be done in **float64**, because `quantize.ts` divides f32 values as JS
+  doubles; float32 arithmetic rounds the quotient first and flips a further
+  **57,083** elements of the same 106,168,320.
+  Two costs remain, and they stand as before: the artifact freezes the error in
+  (today's int8 path is an *in-browser* measurement against the f32 model), and it
+  breaks the "download the published checkpoint, verify it here" story. Serving it
+  from a public object store also needs a public bucket URL, which is a
+  dashboard-level setting rather than something the S3 credentials can enable.
+  The honest framing is unchanged: it buys a smaller first visit, not a different
+  class of product.
 * **Hugging Face rate-limits the endpoint that serves the checkpoint** (3000
   requests / 300 s per client). Repeated cold loads from one IP can trip it, and
   a tripped limit reaches the page as a bare `TypeError: Failed to fetch`, which
