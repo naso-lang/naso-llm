@@ -328,7 +328,7 @@ function addMessage(role: string, content: string): HTMLElement {
   const el = $('chat');
   el.querySelector('.empty')?.remove();
   const wrap = document.createElement('div');
-  wrap.className = `msg ${role}`;
+  wrap.className = `msg ${role} fade-in`;
   const who = document.createElement('div');
   who.className = 'who';
   who.textContent = role;
@@ -358,6 +358,15 @@ async function send() {
   setDot('dot-gpu', 'busy');
 
   const body = addMessage('assistant', '');
+  // Loading placeholder: animated "thinking" dots until the first token lands.
+  // onToken replaces this via `body.textContent = soFar` on the first tick, so
+  // the dots vanish precisely when streaming begins -- the perceived latency of
+  // the model "starting to think" is made visible rather than blank.
+  const thinking = document.createElement('span');
+  thinking.className = 'thinking';
+  thinking.innerHTML = '<span></span><span></span><span></span>';
+  body.appendChild(thinking);
+
   const caret = document.createElement('span');
   caret.className = 'caret';
   caret.textContent = ' ';
