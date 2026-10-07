@@ -13,7 +13,7 @@ import { KERNEL_SPECS, loadKernelSource } from './kernels.js';
 import { webgpuEngine } from './webgpu.js';
 import { parseSafetensors, parseNPQ, fetchWithProgress, fetchWithRetry, type Tensor } from './model.js';
 import { BPETokenizer, type ChatMessage } from './tokenizer.js';
-import { createKVCache, prefill, decodeFrom, type KVCache } from './generate.js';
+import { createKVCache, prefill, decodeFromAsync, type KVCache } from './generate.js';
 import { quantizeRows, quantError, packedBytes, type QuantizedMatrix } from './quantize.js';
 
 const SYSTEM_PROMPT = 'You are a helpful AI assistant.';
@@ -347,6 +347,7 @@ async function send() {
   const text = inputEl.value.trim();
   if (!text) return;
   inputEl.value = '';
+  inputEl.style.height = ''; // collapse a grown multi-line box back to one line
 
   history.push({ role: 'user', content: text });
   addMessage('user', text);
@@ -370,7 +371,11 @@ async function send() {
   const caret = document.createElement('span');
   caret.className = 'caret';
   caret.textContent = ' ';
-  body.appendChild(caret);
+  // Yield to a render frame so the "thinking" dots paint BEFORE the synchronous
+  // prefill blocks the renderer. (`await Promise.resolve()` would only drain the
+  // microtask queue and never let the dots draw -- the whole UX would freeze
+  // until generation finished, same as the original bug.)
+  await new Promise((r) => requestAnimationFrame(r));
 
   try {
     // Incremental context, in the model's real ChatML format. The turn markers
@@ -392,7 +397,7 @@ async function send() {
     const temperature = Number($<HTMLInputElement>('temperature').value) || 0;
     const topK = Number($<HTMLInputElement>('top-k').value) || 1;
 
-    const ids = decodeFrom(tensors, config, tokenizer, logits, cache, {
+    const ids = await decodeFromAsync(tensors, config, tokenizer, logits, cache, {
       maxTokens,
       temperature,
       topK,
@@ -535,6 +540,15 @@ async function boot() {
       e.preventDefault();
       void send();
     }
+  });
+  // Auto-grow the textarea to fit its content (no manual resize -- resize:none
+  // in the stylesheet). Collapsed to the single-line min-height until the user
+  // types past a line, so the composer only "grows" when the input needs more
+  // room. height:auto first lets it shrink on backspace, not just grow.
+  const inputEl = $<HTMLTextAreaElement>('input');
+  inputEl.addEventListener('input', () => {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = inputEl.scrollHeight + 'px';
   });
 
   // Watchdog: boot() sets window.__nasoBooted on its first line. If the page is

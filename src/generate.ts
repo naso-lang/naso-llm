@@ -296,7 +296,9 @@ export function prefill(
 /**
  * Sample tokens starting from an existing logits vector, appending every
  * generated token to `cache`. This is the decode half of `generate`, exposed so
- * a conversation can continue from an already-populated cache.
+ * a conversation can continue from an already-populated cache. Synchronous --
+ * the deterministic CPU reference tests use this; the browser chat uses
+ * `decodeFromAsync` instead so it can yield between tokens.
  */
 export function decodeFrom(
   t: Tensors,
@@ -324,6 +326,49 @@ export function decodeFrom(
     opts.onToken?.(next, decoder.decode(out));
     if (cache.pos >= cache.maxSeq) break;
     logits = forwardToken(t, config, next, cache);
+  }
+  return out;
+}
+
+/**
+ * Async variant of `decodeFrom` that yields to the event loop after each token,
+ * so the in-browser chat can repaint the streaming caret / "thinking" indicator
+ * between tokens. Behaviour is otherwise IDENTICAL to `decodeFrom` (same sampler,
+ * same cache writes, same `onToken` decoded text). `generate.ts` tests keep the
+ * synchronous `decodeFrom`; `main.ts` uses this one so the renderer is not starved
+ * by the decode loop and the user actually sees tokens stream.
+ */
+export async function decodeFromAsync(
+  t: Tensors,
+  config: ModelConfig,
+  decoder: Decoder,
+  firstLogits: Float32Array,
+  cache: KVCache,
+  opts: GenerateOptions = {},
+): Promise<number[]> {
+  const maxTokens = opts.maxTokens ?? 128;
+  const rand = mulberry32(opts.seed ?? 1234);
+  const out: number[] = [];
+  let logits = firstLogits;
+
+  for (let step = 0; step < maxTokens; step++) {
+    if (opts.shouldStop?.()) break;
+    const next = sampleToken(logits, {
+      temperature: opts.temperature,
+      topK: opts.topK,
+      topP: opts.topP,
+      rand,
+    });
+    if (next === decoder.eosId) break;
+    out.push(next);
+    opts.onToken?.(next, decoder.decode(out));
+    if (cache.pos >= cache.maxSeq) break;
+    logits = forwardToken(t, config, next, cache);
+    // Yield to a RENDER FRAME (not a microtask): `await Promise.resolve()` only
+    // drains the microtask queue, so the renderer never paints between tokens
+    // and the caret / streamed text never appear until the whole loop returns.
+    // rAF hands control back at the next paint frame so each token is visible.
+    await new Promise((r) => requestAnimationFrame(r));
   }
   return out;
 }

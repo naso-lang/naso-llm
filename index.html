@@ -96,12 +96,12 @@
   @keyframes fadeIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 
   /* composer */
-  .composer { display: flex; gap: 0.5rem; align-items: flex-end; }
+  .composer { display: flex; gap: 0.5rem; align-items: flex-end; margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.85rem; }
   .composer textarea {
     flex: 1; font: inherit; background: var(--panel-2); color: var(--text);
     border: 1px solid var(--border); border-radius: 14px; padding: 0.6rem 0.85rem;
-    resize: vertical; min-height: 2.5rem; max-height: 10rem; outline: none;
-    transition: border-color 0.15s; font-size: 0.9rem;
+    resize: none; min-height: 2.5rem; max-height: 10rem; outline: none;
+    transition: border-color 0.15s; font-size: 0.9rem; overflow: hidden;
   }
   .composer textarea:focus { border-color: var(--accent); }
   .composer textarea:disabled { opacity: 0.45; }
