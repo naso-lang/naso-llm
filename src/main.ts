@@ -13,7 +13,7 @@ import { KERNEL_SPECS, loadKernelSource } from './kernels.js';
 import { webgpuEngine } from './webgpu.js';
 import { parseSafetensors, parseNPQ, fetchWithProgress, fetchWithRetry, type Tensor } from './model.js';
 import { BPETokenizer, type ChatMessage } from './tokenizer.js';
-import { createKVCache, prefill, decodeFromAsync, type KVCache } from './generate.js';
+import { createKVCache, prefillAsync, decodeFromAsync, type KVCache } from './generate.js';
 import { quantizeRows, quantError, packedBytes, type QuantizedMatrix } from './quantize.js';
 
 const SYSTEM_PROMPT = 'You are a helpful AI assistant.';
@@ -385,13 +385,13 @@ async function send() {
     // the cache's contents are identical to rendering the whole conversation
     // and prefilling it from scratch. The system block is emitted only when the
     // cache is empty, otherwise it would repeat every turn.
-    const IM_START = '\u003c\u007cim_start\u007c\u003e';
-    const IM_END = '\u003c\u007cim_end\u007c\u003e';
-    if (cache.pos === 0) {
-      prefill(tensors, config, tokenizer.encode(`${IM_START}system\n${SYSTEM_PROMPT}${IM_END}\n`, true), cache);
-    }
-    let logits = prefill(tensors, config, tokenizer.encode(`${IM_START}user\n${text}${IM_END}\n`, true), cache);
-    logits = prefill(tensors, config, tokenizer.encode(`${IM_START}assistant\n`, true), cache);
+    const IM_START = '\\u003c\\u007cim_start\\u007c\\u003e';
+        const IM_END = '\\u003c\\u007cim_end\\u007c\\u003e';
+        if (cache.pos === 0) {
+          await prefillAsync(tensors, config, tokenizer.encode(`${IM_START}system\n${SYSTEM_PROMPT}${IM_END}\n`, true), cache);
+        }
+        let logits = await prefillAsync(tensors, config, tokenizer.encode(`${IM_START}user\n${text}${IM_END}\n`, true), cache);
+        logits = await prefillAsync(tensors, config, tokenizer.encode(`${IM_START}assistant\n`, true), cache);
 
     const maxTokens = Number($<HTMLInputElement>('max-tokens').value) || 96;
     const temperature = Number($<HTMLInputElement>('temperature').value) || 0;
@@ -417,7 +417,7 @@ async function send() {
       body.textContent = reply;
       // Close the assistant turn with the real marker so the next turn continues
       // from a well-formed boundary.
-      prefill(tensors, config, tokenizer.encode(`${IM_END}\n`, true), cache);
+      await prefillAsync(tensors, config, tokenizer.encode(`${IM_END}\n`, true), cache);
     } else {
       body.textContent = '(no tokens — raise max tokens or rephrase)';
     }

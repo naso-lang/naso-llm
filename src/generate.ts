@@ -294,6 +294,30 @@ export function prefill(
 }
 
 /**
+ * Async variant of `prefill` that yields to the event loop after each prompt
+ * token, so a long prompt doesn't hard-freeze the page. The browser chat uses
+ * this so the "thinking" indicator stays painted and animated while the prompt
+ * is encoded into the KV cache, and the page stays responsive (the Stop button
+ * works) during the prompt. A microtask (`await Promise.resolve()`) would NOT
+ * allow a repaint or event-loop turn; `setTimeout(0)` is a macrotask, so it
+ * lets a refresh frame through between prompt tokens. The deterministic CPU
+ * reference tests keep the synchronous `prefill`.
+ */
+export async function prefillAsync(
+  t: Tensors,
+  config: ModelConfig,
+  ids: number[],
+  cache: KVCache,
+): Promise<Float32Array> {
+  let logits = new Float32Array(0);
+  for (let i = 0; i < ids.length; i++) {
+    logits = forwardToken(t, config, ids[i], cache, i < ids.length - 1);
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  return logits;
+}
+
+/**
  * Sample tokens starting from an existing logits vector, appending every
  * generated token to `cache`. This is the decode half of `generate`, exposed so
  * a conversation can continue from an already-populated cache. Synchronous --
