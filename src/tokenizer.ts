@@ -236,15 +236,12 @@ export class BPETokenizer {
   }
 
   /** Decode ids to text (byte-level chars -> bytes -> UTF-8). */
-  decode(ids: number[]): string {
+  decode(ids: number[], filterSpecials = false): string {
     let byteStr = '';
     for (const id of ids) {
       const tok = this.idToToken[id];
       if (tok === undefined) continue;
-      if (this.specials.includes(tok)) {
-        byteStr += tok;
-        continue;
-      }
+      if (filterSpecials && this.specials.includes(tok)) continue;
       for (const ch of tok) {
         const b = this.charToByte.get(ch);
         if (b !== undefined) byteStr += String.fromCharCode(b);
@@ -254,7 +251,15 @@ export class BPETokenizer {
     // half-generated multi-byte character never throws mid-stream.
     const bytes = new Uint8Array(byteStr.length);
     for (let i = 0; i < byteStr.length; i++) bytes[i] = byteStr.charCodeAt(i) & 0xff;
-    return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    let text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    // Also filter special token strings from the decoded text, in case the model
+    // generated them as byte-level sequences rather than special token IDs.
+    if (filterSpecials) {
+      for (const s of this.specials) {
+        text = text.split(s).join('');
+      }
+    }
+    return text;
   }
 
   get size(): number {

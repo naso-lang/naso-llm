@@ -174,7 +174,7 @@ export function forwardToken(
 
 /** Minimal tokenizer surface this module needs (avoids a circular import). */
 export interface Decoder {
-  decode(ids: number[]): string;
+  decode(ids: number[], filterSpecials?: boolean): string;
   readonly eosId: number;
 }
 
@@ -189,6 +189,8 @@ export interface GenerateOptions {
   onToken?: (id: number, text: string) => void;
   /** Return true to stop early (a UI stop button). */
   shouldStop?: () => boolean;
+  /** Whether to filter special tokens (ChatML markers) from decoded text. */
+  filterSpecials?: boolean;
 }
 
 /** Deterministic PRNG, so a seed reproduces a run exactly. */
@@ -347,7 +349,8 @@ export function decodeFrom(
     });
     if (next === decoder.eosId) break;
     out.push(next);
-    opts.onToken?.(next, decoder.decode(out));
+    const decoded = decoder.decode(out, opts.filterSpecials);
+    opts.onToken?.(next, decoded);
     if (cache.pos >= cache.maxSeq) break;
     logits = forwardToken(t, config, next, cache);
   }
@@ -385,7 +388,8 @@ export async function decodeFromAsync(
     });
     if (next === decoder.eosId) break;
     out.push(next);
-    opts.onToken?.(next, decoder.decode(out));
+    const decoded = decoder.decode(out, opts.filterSpecials);
+    opts.onToken?.(next, decoded);
     if (cache.pos >= cache.maxSeq) break;
     logits = forwardToken(t, config, next, cache);
     // Yield to a RENDER FRAME (not a microtask): `await Promise.resolve()` only

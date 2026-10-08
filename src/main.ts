@@ -385,8 +385,8 @@ async function send() {
     // the cache's contents are identical to rendering the whole conversation
     // and prefilling it from scratch. The system block is emitted only when the
     // cache is empty, otherwise it would repeat every turn.
-    const IM_START = '\\u003c\\u007cim_start\\u007c\\u003e';
-        const IM_END = '\\u003c\\u007cim_end\\u007c\\u003e';
+    const IM_START = '\u003c\u007cim_start\u007c\u003e';
+    const IM_END = '\u003c\u007cim_end\u007c\u003e';
         if (cache.pos === 0) {
           await prefillAsync(tensors, config, tokenizer.encode(`${IM_START}system\n${SYSTEM_PROMPT}${IM_END}\n`, true), cache);
         }
@@ -403,6 +403,7 @@ async function send() {
       topK,
       seed: 1234,
       shouldStop: () => stopRequested,
+      filterSpecials: true,
       onToken: (_id, soFar) => {
         body.textContent = soFar;
         body.appendChild(caret);
