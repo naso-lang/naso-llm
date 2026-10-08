@@ -100,17 +100,20 @@ export default defineConfig({
         serveArtifact(server.middlewares, 'dist');
       },
       // Copy the artifact beside the bundle so a LOCAL `vite preview` can serve
-      // it via the same /model/ route. Gated OFF for GH Pages deploys: the
-      // production site serves the f32 safetensors (no local artifact is hosted
-      // there -- Cloudflare is dev-only), and shipping a 163 MB binary into the
-      // `dist` that gh-pages uploads is wasted quota for no benefit.
+      // it via the same /model/ route. Including it in GH Pages deploys too:
+      // the f32 safetensors (269 MB) is larger AND frequently exceeds the
+      // browser Cache API quota, causing a re-download on every visit.
+      // The int8 NPQ1 (163 MB) fits comfortably and the app caches it in the
+      // Cache API after first use, so subsequent loads are zero-network.
+      // Set NASO_PACKAGE_MODEL=0 to skip packaging (e.g. CI without the
+      // artifact on disk).
       writeBundle(options: { dir?: string }) {
         if (!existsSync(NPQ_SRC)) return;
-        if (env.GH_PAGES) return;
+        if (env.NASO_PACKAGE_MODEL === '0') return;
         const outDir = join(options.dir ?? 'dist', 'model');
         mkdirSync(outDir, { recursive: true });
         copyFileSync(NPQ_SRC, join(outDir, NPQ_NAME));
-        console.log(`[naso-local-model] packaged ${NPQ_NAME} -> ${outDir} (set NASO_PACKAGE_MODEL=1 to disable this copy)`);
+        console.log(`[naso-local-model] packaged ${NPQ_NAME} -> ${outDir} (set NASO_PACKAGE_MODEL=0 to disable)`);
       },
     },
   ],
