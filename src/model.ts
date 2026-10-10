@@ -81,7 +81,7 @@ function decode(dtype: string, bytes: Uint8Array, elements: number): Float32Arra
 /**
  * Parse an NPQ1 pre-quantised checkpoint (see tools/build_quantized.py).
  *
- * This is the format that lets a first visit download 163.5 MB instead of 269 MB.
+ * This is the format that lets a first visit download ~67 MB instead of 269 MB.
  * It is deliberately NOT a new tensor type: int8 tensors are DEQUANTISED here
  * into the same f32 `Tensor` every other loader path produces, so the generator,
  * the quantisation check and the KV cache need no changes at all.
@@ -92,7 +92,9 @@ function decode(dtype: string, bytes: Uint8Array, elements: number): Float32Arra
  *
  *   magic "NPQ1" | u32 version | u32 count | per tensor:
  *     u32 nameLen | name | u8 dtype | u32 rank | rank*u32 dims | data
- *   dtype 0 = f32, 1 = int8 (u32-packed + per-row f32 scales), 2 = bf16
+ *   dtype 0 = f32, 1 = int8 (u32-packed + per-row f32 scales), 2 = bf16, 3 = int4
+ *   int4 packs eight signed 4-bit values per u32 (nibble, little-endian) with
+ *   per-row f32 scales; range [-7, 7], scale = max(|W|) / 7
  */
 export function parseNPQ(
   buffer: ArrayBuffer,
@@ -142,6 +144,25 @@ export function parseNPQ(
           for (let i = 0; i < 4; i++) {
             const b = (word >>> (i * 8)) & 0xff;
             out[row + w * 4 + i] = (b < 128 ? b : b - 256) * scale;
+          }
+        }
+      }
+      tensors.set(name, { dtype: 'F32', shape, data: out });
+    } else if (dtype === 3) {
+      // int4: 8 signed 4-bit values per u32, per-row f32 scales (nibbles, LE).
+      const [n, k] = shape;
+      const kwords = k / 8;
+      const out = new Float32Array(elements);
+      const packed = new Uint32Array(buffer.slice(off, off + n * kwords * 4)); off += n * kwords * 4;
+      const scales = new Float32Array(buffer.slice(off, off + n * 4)); off += n * 4;
+      for (let o = 0; o < n; o++) {
+        const scale = scales[o];
+        const row = o * k;
+        for (let w = 0; w < kwords; w++) {
+          const word = packed[o * kwords + w];
+          for (let i = 0; i < 8; i++) {
+            const b = (word >>> (i * 4)) & 0xf;
+            out[row + w * 8 + i] = (b < 8 ? b : b - 16) * scale;
           }
         }
       }

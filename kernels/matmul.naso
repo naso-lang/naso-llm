@@ -1,0 +1,80 @@
+// matmul.naso — Matrix multiplication kernel for LLM inference.
+//
+// Extends base Naso with: 2D tensors, sequential `for` reductions, and
+// `forall` over a flat index that decodes into (row, col). The compiler
+// (naso_kernel.ts) expands this into a WGSL compute shader with a
+// workgroup per output tile.
+//
+// Shape: (M, K) @ (K, N) → (M, N)
+// Each `forall` invocation computes one output element C[i,j] as
+// a dot product of row i of A and column j of B.
+//
+// Example: linear layer projection 3072 → 768, batch 128
+//   matmul_768(A[128,3072], B[3072,768], C[128,768])
+
+fn matmul_768(
+    a: [1] Tensor<f32, (128, 3072)>,
+    b: [1] Tensor<f32, (3072, 768)>,
+    out: inout [1] Tensor<f32, (128, 768)>
+) {
+    forall i in 0..(128 * 768) {
+        let row = i / 768;
+        let col = i % 768;
+        let mut sum = 0.0;
+        for k in 0..3072 {
+            sum = sum + a[row, k] * b[k, col];
+        }
+        out[row, col] = sum;
+    }
+}
+
+// 768 → 3072 feed-forward expansion
+fn mlp_up_768(
+    a: [1] Tensor<f32, (128, 768)>,
+    b: [1] Tensor<f32, (768, 3072)>,
+    out: inout [1] Tensor<f32, (128, 3072)>
+) {
+    forall i in 0..(128 * 3072) {
+        let row = i / 3072;
+        let col = i % 3072;
+        let mut sum = 0.0;
+        for k in 0..768 {
+            sum = sum + a[row, k] * b[k, col];
+        }
+        out[row, col] = sum;
+    }
+}
+
+// 3072 → 768 feed-forward projection
+fn mlp_down_3072(
+    a: [1] Tensor<f32, (128, 3072)>,
+    b: [1] Tensor<f32, (3072, 768)>,
+    out: inout [1] Tensor<f32, (128, 768)>
+) {
+    forall i in 0..(128 * 768) {
+        let row = i / 768;
+        let col = i % 768;
+        let mut sum = 0.0;
+        for k in 0..3072 {
+            sum = sum + a[row, k] * b[k, col];
+        }
+        out[row, col] = sum;
+    }
+}
+
+// QKV projection: 768 → (3 × 768) = 2304
+fn qkv_proj_768(
+    a: [1] Tensor<f32, (128, 768)>,
+    b: [1] Tensor<f32, (768, 2304)>,
+    out: inout [1] Tensor<f32, (128, 2304)>
+) {
+    forall i in 0..(128 * 2304) {
+        let row = i / 2304;
+        let col = i % 2304;
+        let mut sum = 0.0;
+        for k in 0..768 {
+            sum = sum + a[row, k] * b[k, col];
+        }
+        out[row, col] = sum;
+    }
+}

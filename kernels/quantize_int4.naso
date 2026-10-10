@@ -1,0 +1,83 @@
+// Naso int4 quantization kernels for browser LLM inference.
+//
+// Same structural pattern as quantize_int8.naso, but symmetric 4-bit:
+//
+//   scale = absmax / 7
+//   q     = clamp(round(x / scale), -7, 7)
+//   x'    = q * scale
+//
+// The round-trip error is bounded by scale/2 per element (half a step, same
+// absolute relationship as int8). The step is coarser (max/7 vs max/127), so
+// the per-element error is larger, but the packed form is 8x smaller than f32.
+//
+// Nibble packing (8 values per u32, little-endian) and per-row scale computation
+// live in src/quantize.ts (computeScales4 / quantizeRows4 / unpackNibble) --
+// the WGSL backend cannot express a reduction (the per-row max) today, so the
+// host computes scales. These kernels own the *elementwise arithmetic*: the
+// same maths the prover would discharge, lowered by the verified compiler so the
+// browser runs exactly the rounding the verification tool checks.
+//
+// Compilation constraints (established by compiling probe kernels):
+//   * `Tensor[f32, N]` -> array<f32>, `Tensor[i32, N]` -> array<i32>.
+//   * i4 has no WGSL storage type; codes travel as i32 (one code per slot, the
+//     sign-extended nibble value), and the TS layer handles 8x packing.
+//   * `[1]` (linear) -> read; `inout [1]` -> read_write.
+//   * Scalar params -> @group(0) @binding(n) uniform; ABI reports them.
+//   * No `max`/`select` builtins; `max(v,0)` is `(v + abs(v)) * 0.5`.
+//   * Available float intrinsics: abs, exp, clamp, round, sqrt, floor.
+
+/// Quantize f32 -> i32 codes in the int4 range, symmetric scale.
+///
+/// input  [1]        linear, read once
+/// output inout [1]  written in place
+/// scale f32         quantization step; must be positive
+fn quantize_int4_symmetric(
+    input: [1] Tensor[f32, 1024],
+    output: inout [1] Tensor[i32, 1024],
+    scale: f32
+) requires {
+    assert(scale > 0.0);
+} {
+    forall i in 0..1024 {
+        let v = input[i] / scale;
+        output[i] = clamp(round(v), -7.0, 7.0) as i32;
+    }
+}
+
+/// Dequantize i32 codes -> f32, symmetric scale.
+///
+/// input  [1]        linear, read once
+/// output inout [1]  written in place
+/// scale f32         quantization step; must be positive
+fn dequantize_int4_symmetric(
+    input: [1] Tensor[i32, 1024],
+    output: inout [1] Tensor[f32, 1024],
+    scale: f32
+) requires {
+    assert(scale > 0.0);
+} {
+    forall i in 0..1024 {
+        let v = input[i] as f32;
+        output[i] = v * scale;
+    }
+}
+
+/// Fused dequant + scale + clamp: out[i] = clamp(in[i] * scale, lo, hi).
+///
+/// One read, one write, one multiply, one clamp per element -- the tightest
+/// possible kernel for "dequantize then apply a bounded activation".
+fn dequant_scale_clamp_int4(
+    input: [1] Tensor[i32, 1024],
+    output: inout [1] Tensor[f32, 1024],
+    scale: f32,
+    lo: f32,
+    hi: f32
+) requires {
+    assert(scale > 0.0);
+    assert(lo < hi);
+} {
+    forall i in 0..1024 {
+        let v = input[i] as f32 * scale;
+        output[i] = clamp(v, lo, hi);
+    }
+}

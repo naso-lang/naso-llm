@@ -90,7 +90,8 @@ var MODELS = [
     vocabSize: 49152,
     rmsNormEps: 1e-5,
     ropeTheta: 1e5,
-    weightsBytes: 269060552
+    weightsBytes: 269060552,
+    quantizedLocal: "/model/smollm2-135m-int8.npq"
   }
 ];
 var DEFAULT_MODEL = MODELS[0];
@@ -413,7 +414,8 @@ function decodeFrom(t, config2, decoder, firstLogits, cache, opts = {}) {
     });
     if (next === decoder.eosId) break;
     out.push(next);
-    opts.onToken?.(next, decoder.decode(out));
+    const decoded = decoder.decode(out, opts.filterSpecials);
+    opts.onToken?.(next, decoded);
     if (cache.pos >= cache.maxSeq) break;
     logits = forwardToken(t, config2, next, cache);
   }
@@ -591,15 +593,12 @@ var BPETokenizer = class _BPETokenizer {
     return ids2;
   }
   /** Decode ids to text (byte-level chars -> bytes -> UTF-8). */
-  decode(ids2) {
+  decode(ids2, filterSpecials = false) {
     let byteStr = "";
     for (const id of ids2) {
       const tok2 = this.idToToken[id];
       if (tok2 === void 0) continue;
-      if (this.specials.includes(tok2)) {
-        byteStr += tok2;
-        continue;
-      }
+      if (filterSpecials && this.specials.includes(tok2)) continue;
       for (const ch of tok2) {
         const b = this.charToByte.get(ch);
         if (b !== void 0) byteStr += String.fromCharCode(b);
@@ -607,7 +606,13 @@ var BPETokenizer = class _BPETokenizer {
     }
     const bytes = new Uint8Array(byteStr.length);
     for (let i = 0; i < byteStr.length; i++) bytes[i] = byteStr.charCodeAt(i) & 255;
-    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    let text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    if (filterSpecials) {
+      for (const s of this.specials) {
+        text = text.split(s).join("");
+      }
+    }
+    return text;
   }
   get size() {
     return this.idToToken.length;

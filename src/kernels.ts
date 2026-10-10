@@ -43,6 +43,21 @@ export const KERNEL_SPECS: KernelSpec[] = [
     file: 'quantize_int8.naso',
     description: 'Fused scale + ReLU, via the exact identity (v + |v|) / 2',
   },
+  {
+    name: 'quantize_int4_symmetric',
+    file: 'quantize_int4.naso',
+    description: 'Symmetric int4 quantisation: q = clamp(round(x / s), -7, 7)',
+  },
+  {
+    name: 'dequantize_int4_symmetric',
+    file: 'quantize_int4.naso',
+    description: 'Dequantisation: x = q * s',
+  },
+  {
+    name: 'dequant_scale_clamp_int4',
+    file: 'quantize_int4.naso',
+    description: 'Fused int4 dequant + scale + clamp',
+  },
 ];
 
 const sourceCache = new Map<string, string>();
